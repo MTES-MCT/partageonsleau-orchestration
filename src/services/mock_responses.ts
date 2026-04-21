@@ -2,15 +2,14 @@ import type {ServiceAccountContext} from '../connectors/types.js'
 
 type StoredServiceAccountContext = Omit<ServiceAccountContext, 'serviceAccount'>
 
-export const availableServiceAccounts: string[] = ['willie_blv_0']
-
 export const contextByAccount: Record<string, StoredServiceAccountContext> = {
   willie_blv_0: {
     points: [
       {
-        pointId: 'aedd02ee-6876-4afc-91bc-b2a9a142b79f',
+        sourcePointId: 'aedd02ee-6876-4afc-91bc-b2a9a142b79f',
         connector: 'willie',
-        lastRunAt: null,
+        lastRunAt: undefined,
+        most_recent_available_date: undefined,
       },
       // {
       //   pointId: "6a404a68-2251-402d-bae3-c66f7c3e095f",
@@ -122,4 +121,27 @@ export const contextByAccount: Record<string, StoredServiceAccountContext> = {
   willie_blv_1: {
     points: [],
   },
+  orange_live_objects_blv_0: {
+    points: [
+      {
+        sourcePointId: 'urn:lo:nsid:imei:359404232376831',
+        connector: 'orange_live_objects',
+        lastRunAt: undefined,
+        most_recent_available_date: undefined,
+      },
+    ],
+  },
+  aquasys_blv_0: {
+    points: [
+      {
+        sourcePointId: '38-0852',
+        connector: 'aquasys',
+        lastRunAt: undefined,
+        most_recent_available_date: undefined,
+        sourceFiles: ['data/Dossiers_Consommations_30092024-31122025.xlsx'],
+      },
+    ],
+  },
 }
+
+export const availableServiceAccounts: string[] = Object.keys(contextByAccount)

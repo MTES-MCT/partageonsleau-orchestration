@@ -41,12 +41,18 @@ export async function pullUpdatedData(
     )
 
     for (const point of context.points) {
-      const {connector: connectorName, pointId, lastRunAt} = point
+      const {
+        connector: connectorName,
+        sourcePointId,
+        lastRunAt,
+        most_recent_available_date,
+        sourceFiles,
+      } = point
       const connector = connectorRegistry.get(connectorName)
 
       if (!connector) {
         console.error(
-          `[PullUpdatedData] Connecteur introuvable pour le point : ${pointId} (connecteur : ${connectorName})`,
+          `[PullUpdatedData] Connecteur introuvable pour le point source : ${sourcePointId} (connecteur : ${connectorName})`,
         )
         continue
       }
@@ -54,17 +60,19 @@ export async function pullUpdatedData(
       try {
         const output = await connector.run({
           serviceAccount,
-          pointId,
+          sourcePointId,
           lastRunAt,
+          most_recent_available_date,
+          sourceFiles,
         })
 
         await partageonsLeauClient.ingest(output)
         console.log(
-          `[PullUpdatedData] Données ingérées pour le point : ${pointId}`,
+          `[PullUpdatedData] Données ingérées pour le point source : ${sourcePointId}`,
         )
       } catch (error) {
         console.error(
-          `[PullUpdatedData] Échec de l'exécution du connecteur pour le point ${pointId} :`,
+          `[PullUpdatedData] Échec de l'exécution du connecteur pour le point source ${sourcePointId} :`,
           error,
         )
       }

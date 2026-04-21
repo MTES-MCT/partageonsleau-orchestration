@@ -23,7 +23,7 @@ export class PartageonsLeauClient {
     // Implementation locale initiale en attendant l'integration API Partageons l'eau.
     const context = contextByAccount[serviceAccount]
     if (!context) {
-      return null
+      return undefined
     }
 
     return {
@@ -48,7 +48,7 @@ export class PartageonsLeauClient {
       0,
     )
     console.log(
-      `[PartageonsLeauClient] Ingesting ${metricCount} metrics (${valueCount} values) for service account: ${output.serviceAccount} and point: ${output.pointId}`,
+      `[PartageonsLeauClient] Ingesting ${metricCount} metrics (${valueCount} values) for service account: ${output.serviceAccount} and source point: ${output.sourcePointId}`,
     )
   }
 }

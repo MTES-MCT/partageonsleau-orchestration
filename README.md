@@ -31,6 +31,7 @@ Copier `.env.example` vers `.env` puis renseigner les variables.
 Variables actuellement utilisees:
 
 - `WILLIE_API_TOKEN`: token Bearer pour l'API Willie
+- `ORANGE_LIVE_OBJECTS_API_KEY`: cle API pour l'API Orange Live Objects
 
 ## Scripts
 
@@ -68,7 +69,7 @@ Le connecteur Willie interroge:
 
 Parametres utilises:
 
-- `stationIds` = `pointId`
+- `stationIds` = `sourcePointId` (station_id Willie)
 - `startDate` = `lastRunAt` (ou fallback)
 - `endDate` = maintenant
 - `resolution` = `day`
