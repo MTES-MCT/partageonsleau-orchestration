@@ -15,6 +15,11 @@ export type ServiceAccountContext = {
   points: ServiceAccountPointContext[]
 }
 
+export type DeclarantContext = {
+  contextId: string
+  points: ServiceAccountPointContext[]
+}
+
 export type ConnectorRunContext = {
   serviceAccount: string
   sourcePointId: string

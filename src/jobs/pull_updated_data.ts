@@ -15,6 +15,7 @@ export async function pullUpdatedData(
 
   // Récupère la liste des comptes service disponibles
   console.log('[PullUpdatedData] Recherche des comptes service disponibles...')
+  
   const availableServiceAccounts =
     await partageonsLeauClient.getAvailableServiceAccounts()
   console.log(
@@ -22,59 +23,77 @@ export async function pullUpdatedData(
   )
 
   for (const serviceAccount of availableServiceAccounts) {
-    console.log(
-      `[PullUpdatedData] Récupération du contexte pour le compte service : ${serviceAccount}`,
+    console.log(`[PullUpdatedData] Auth service account : ${serviceAccount}`)
+    const serviceAccountToken =
+      await partageonsLeauClient.getServiceAccountToken(serviceAccount)
+    const declarants = await partageonsLeauClient.getDeclarantsForServiceAccount(
+      serviceAccount,
+      serviceAccountToken,
     )
 
-    const context =
-      await partageonsLeauClient.getContextForServiceAccount(serviceAccount)
+    console.log(
+      `[PullUpdatedData] Nombre de déclarants pour ${serviceAccount} : ${declarants.length}`,
+    )
 
-    if (!context) {
-      console.error(
-        `[PullUpdatedData] Contexte introuvable pour le compte service : ${serviceAccount}`,
+    for (const declarant of declarants) {
+      console.log(
+        `[PullUpdatedData] Traitement déclarant ${declarant.id} (${declarant.name})`,
       )
-      continue
-    }
+      const declarantToken = await partageonsLeauClient.getDeclarantToken(
+        declarant.id,
+        serviceAccountToken,
+      )
+      const contexts = await partageonsLeauClient.getContextsForDeclarant(
+        declarant.id,
+        declarantToken,
+      )
 
-    console.log(
-      `[PullUpdatedData] Nombre de points à traiter pour ${serviceAccount} : ${context.points.length}`,
-    )
+      console.log(
+        `[PullUpdatedData] Nombre de contextes pour le déclarant ${declarant.id} : ${contexts.length}`,
+      )
 
-    for (const point of context.points) {
-      const {
-        connector: connectorName,
-        sourcePointId,
-        lastRunAt,
-        most_recent_available_date,
-        sourceFiles,
-      } = point
-      const connector = connectorRegistry.get(connectorName)
-
-      if (!connector) {
-        console.error(
-          `[PullUpdatedData] Connecteur introuvable pour le point source : ${sourcePointId} (connecteur : ${connectorName})`,
-        )
-        continue
-      }
-
-      try {
-        const output = await connector.run({
-          serviceAccount,
-          sourcePointId,
-          lastRunAt,
-          most_recent_available_date,
-          sourceFiles,
-        })
-
-        await partageonsLeauClient.ingest(output)
+      for (const context of contexts) {
         console.log(
-          `[PullUpdatedData] Données ingérées pour le point source : ${sourcePointId}`,
+          `[PullUpdatedData] Contexte ${context.contextId} : ${context.points.length} points`,
         )
-      } catch (error) {
-        console.error(
-          `[PullUpdatedData] Échec de l'exécution du connecteur pour le point source ${sourcePointId} :`,
-          error,
-        )
+
+        for (const point of context.points) {
+          const {
+            connector: connectorName,
+            sourcePointId,
+            lastRunAt,
+            most_recent_available_date,
+            sourceFiles,
+          } = point
+          const connector = connectorRegistry.get(connectorName)
+
+          if (!connector) {
+            console.error(
+              `[PullUpdatedData] Connecteur introuvable pour le point source : ${sourcePointId} (connecteur : ${connectorName})`,
+            )
+            continue
+          }
+
+          try {
+            const output = await connector.run({
+              serviceAccount,
+              sourcePointId,
+              lastRunAt,
+              most_recent_available_date,
+              sourceFiles,
+            })
+
+            await partageonsLeauClient.ingest(output)
+            console.log(
+              `[PullUpdatedData] Données ingérées pour le point source : ${sourcePointId}`,
+            )
+          } catch (error) {
+            console.error(
+              `[PullUpdatedData] Échec de l'exécution du connecteur pour le point source ${sourcePointId} :`,
+              error,
+            )
+          }
+        }
       }
     }
   }
