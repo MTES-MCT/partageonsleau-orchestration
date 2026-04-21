@@ -47,11 +47,37 @@ export class AquasysConnector extends BaseConnector {
     const records = rowsByFile
       .flat()
       .filter((row) => row.sourcePointId === context.sourcePointId)
+      .filter((row) => this.isIncrementalRecord(row, context))
 
     return {
       files,
       records,
     }
+  }
+
+  private isIncrementalRecord(
+    row: AquasysRawRow,
+    context: ConnectorRunContext,
+  ): boolean {
+    const mostRecentDate = context.most_recent_available_date
+    if (!mostRecentDate) {
+      return true
+    }
+
+    const thresholdTime = Date.parse(mostRecentDate)
+    if (Number.isNaN(thresholdTime)) {
+      console.warn(
+        `[${this.name}] Invalid most_recent_available_date "${mostRecentDate}" for source point "${context.sourcePointId}". Falling back to full dataset.`,
+      )
+      return true
+    }
+
+    const rowTime = Date.parse(row.date)
+    if (Number.isNaN(rowTime)) {
+      return false
+    }
+
+    return rowTime > thresholdTime
   }
 
   protected async parse(

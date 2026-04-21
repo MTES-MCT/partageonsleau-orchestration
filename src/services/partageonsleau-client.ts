@@ -95,10 +95,33 @@ export class PartageonsLeauClient {
     }
 
     const response = await this.getJson<{data?: DeclarantContext[]}>(
-      '/service-accounts/me/contexts',
+      `/service-accounts/declarants/${encodeURIComponent(declarantId)}/context`,
       declarantToken,
     )
     return response.data ?? []
+  }
+
+  async updatePointLastRunAt(params: {
+    declarantId: string
+    contextId: string
+    sourcePointId: string
+    lastRunAt: string
+    declarantToken: string
+  }): Promise<void> {
+    if (!this.isApiConfigured()) {
+      console.log(
+        `[PartageonsLeauClient] Mock update last_run_at=${params.lastRunAt} for point ${params.sourcePointId} in context ${params.contextId} (declarant ${params.declarantId}).`,
+      )
+      return
+    }
+
+    await this.postJson(
+      `/service-accounts/declarants/${encodeURIComponent(params.declarantId)}/context/${encodeURIComponent(params.contextId)}/points/${encodeURIComponent(params.sourcePointId)}/last-run`,
+      {
+        last_run_at: params.lastRunAt,
+      },
+      params.declarantToken,
+    )
   }
 
   private async getJson<T>(path: string, bearerToken: string): Promise<T> {

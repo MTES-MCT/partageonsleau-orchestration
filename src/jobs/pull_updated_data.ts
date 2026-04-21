@@ -84,8 +84,15 @@ export async function pullUpdatedData(
             })
 
             await partageonsLeauClient.ingest(output)
+            await partageonsLeauClient.updatePointLastRunAt({
+              declarantId: declarant.id,
+              contextId: context.contextId,
+              sourcePointId,
+              lastRunAt: output.generatedAt,
+              declarantToken,
+            })
             console.log(
-              `[PullUpdatedData] Données ingérées pour le point source : ${sourcePointId}`,
+              `[PullUpdatedData] Données ingérées et last_run_at mis à jour pour le point source : ${sourcePointId}`,
             )
           } catch (error) {
             console.error(
