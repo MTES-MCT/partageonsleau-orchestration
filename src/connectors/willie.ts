@@ -131,7 +131,7 @@ export class WillieConnector extends BaseConnector {
     }
   }
 
-  private getStartDate(lastRunAt: string | undefined): string {
+  private getStartDate(lastRunAt: string | null | undefined): string {
     if (lastRunAt) {
       return new Date(lastRunAt).toISOString()
     }

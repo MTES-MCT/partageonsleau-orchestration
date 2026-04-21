@@ -5,7 +5,7 @@ export type ConfigEntry = {
 export type ServiceAccountPointContext = {
   pointId: string
   connector: string
-  lastRunAt: string | undefined
+  lastRunAt: string | null | undefined
 }
 
 export type ServiceAccountContext = {
@@ -16,7 +16,7 @@ export type ServiceAccountContext = {
 export type ConnectorRunContext = {
   serviceAccount: string
   pointId: string
-  lastRunAt: string | undefined
+  lastRunAt: string | null | undefined
 }
 
 export type TimeserieValue = {

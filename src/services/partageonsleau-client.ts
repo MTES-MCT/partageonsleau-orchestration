@@ -19,7 +19,7 @@ export class PartageonsLeauClient {
    */
   async getContextForServiceAccount(
     serviceAccount: string,
-  ): Promise<ServiceAccountContext | undefined> {
+  ): Promise<ServiceAccountContext | null | undefined> {
     // Implementation locale initiale en attendant l'integration API Partageons l'eau.
     const context = contextByAccount[serviceAccount]
     if (!context) {
