@@ -33,8 +33,8 @@ jobs:
       - name: Type check
         run: npm run check
 
-      #- name: Lint
-      #  run: npm run lint
+      - name: Lint
+       run: npm run lint
 
       - name: Test (if present)
         run: npm test --if-present
