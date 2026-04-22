@@ -23,6 +23,24 @@ export abstract class BaseConnector {
     }
   }
 
+  protected getMinMaxDates<T>(
+    items: T[],
+    getDate: (item: T) => Date,
+  ): {minDate: string | undefined; maxDate: string | undefined} {
+    if (items.length === 0) {
+      return {
+        minDate: undefined,
+        maxDate: undefined,
+      }
+    }
+
+    const dates = items.map((item) => getDate(item).getTime())
+    return {
+      minDate: new Date(Math.min(...dates)).toISOString(),
+      maxDate: new Date(Math.max(...dates)).toISOString(),
+    }
+  }
+
   protected abstract fetchSourceData(
     context: ConnectorRunContext,
   ): Promise<unknown>

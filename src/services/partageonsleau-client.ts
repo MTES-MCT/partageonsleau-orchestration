@@ -1,7 +1,4 @@
-import type {
-  DeclarantContext,
-  ConnectorOutput,
-} from '../connectors/types.js'
+import type {DeclarantContext, ConnectorOutput} from '../connectors/types.js'
 import {
   availableServiceAccounts,
   contextsByDeclarant,
@@ -9,37 +6,76 @@ import {
   type MockDeclarant,
 } from './mock_responses.js'
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function isMockDeclarant(value: unknown): value is MockDeclarant {
+  return (
+    isRecord(value) &&
+    typeof value.id === 'string' &&
+    typeof value.name === 'string'
+  )
+}
+
+function isDeclarantContext(value: unknown): value is DeclarantContext {
+  if (!isRecord(value) || typeof value.contextId !== 'string') {
+    return false
+  }
+
+  if (!Array.isArray(value.points)) {
+    return false
+  }
+
+  return value.points.every((point) => {
+    return (
+      isRecord(point) &&
+      typeof point.sourcePointId === 'string' &&
+      typeof point.connector === 'string' &&
+      (point.lastRunAt === undefined || typeof point.lastRunAt === 'string') &&
+      (point.mostRecentAvailableDate === undefined ||
+        typeof point.mostRecentAvailableDate === 'string') &&
+      (point.sourceFiles === undefined ||
+        (Array.isArray(point.sourceFiles) &&
+          point.sourceFiles.every((item) => typeof item === 'string')))
+    )
+  })
+}
+
 export class PartageonsLeauClient {
   private readonly baseUrl = process.env.PLE_BASE_URL
   private readonly clientId = process.env.CLIENT_ID
   private readonly clientSecret = process.env.CLIENT_SECRET
 
-  private isApiConfigured(): boolean {
-    return Boolean(this.baseUrl && this.clientId && this.clientSecret)
-  }
-
   async getAvailableServiceAccounts(): Promise<string[]> {
     return availableServiceAccounts
   }
 
-  async getServiceAccountToken(
-    serviceAccount: string,
-  ): Promise<string> {
+  async getServiceAccountToken(serviceAccount: string): Promise<string> {
     if (!this.isApiConfigured()) {
       return `mock-sa-token:${serviceAccount}`
     }
 
-    const response = await this.postJson<{
-      access_token?: string
-      token?: string
-    }>('/service-accounts/token', {
+    const response = await this.postJson('/service-accounts/token', {
       clientId: this.clientId,
       clientSecret: this.clientSecret,
     })
 
-    const token = response.access_token ?? response.token
+    if (!isRecord(response)) {
+      throw new Error(
+        '[PartageonsLeauClient] Invalid service account token response.',
+      )
+    }
+
+    const accessToken = response.access_token
+    const fallbackToken = response.token
+    const token =
+      (typeof accessToken === 'string' && accessToken) ||
+      (typeof fallbackToken === 'string' && fallbackToken)
     if (!token) {
-      throw new Error('[PartageonsLeauClient] Missing token in service account auth response.')
+      throw new Error(
+        '[PartageonsLeauClient] Missing token in service account auth response.',
+      )
     }
 
     return token
@@ -53,12 +89,18 @@ export class PartageonsLeauClient {
       return declarantsByServiceAccount[serviceAccount] ?? []
     }
 
-    const response = await this.getJson<{data?: MockDeclarant[]}>(
+    const response = await this.getJson(
       '/service-accounts/me/declarants',
       serviceAccountToken,
     )
 
-    return response.data ?? []
+    if (!isRecord(response) || !Array.isArray(response.data)) {
+      return []
+    }
+
+    return response.data.filter((item): item is MockDeclarant =>
+      isMockDeclarant(item),
+    )
   }
 
   async getDeclarantToken(
@@ -69,18 +111,27 @@ export class PartageonsLeauClient {
       return `mock-declarant-token:${declarantId}`
     }
 
-    const response = await this.postJson<{
-      access_token?: string
-      token?: string
-    }>(
+    const response = await this.postJson(
       `/service-accounts/declarants/${encodeURIComponent(declarantId)}/token`,
       {},
       serviceAccountToken,
     )
 
-    const token = response.access_token ?? response.token
+    if (!isRecord(response)) {
+      throw new Error(
+        '[PartageonsLeauClient] Invalid declarant token response.',
+      )
+    }
+
+    const accessToken = response.access_token
+    const fallbackToken = response.token
+    const token =
+      (typeof accessToken === 'string' && accessToken) ||
+      (typeof fallbackToken === 'string' && fallbackToken)
     if (!token) {
-      throw new Error(`[PartageonsLeauClient] Missing token in declarant auth response for "${declarantId}".`)
+      throw new Error(
+        `[PartageonsLeauClient] Missing token in declarant auth response for "${declarantId}".`,
+      )
     }
 
     return token
@@ -94,14 +145,20 @@ export class PartageonsLeauClient {
       return contextsByDeclarant[declarantId] ?? []
     }
 
-    const response = await this.getJson<{data?: DeclarantContext[]}>(
+    const response = await this.getJson(
       `/service-accounts/declarants/${encodeURIComponent(declarantId)}/context`,
       declarantToken,
     )
-    return response.data ?? []
+    if (!isRecord(response) || !Array.isArray(response.data)) {
+      return []
+    }
+
+    return response.data.filter((item): item is DeclarantContext =>
+      isDeclarantContext(item),
+    )
   }
 
-  async updatePointLastRunAt(params: {
+  async updatePointLastRunAt(parameters: {
     declarantId: string
     contextId: string
     sourcePointId: string
@@ -110,21 +167,45 @@ export class PartageonsLeauClient {
   }): Promise<void> {
     if (!this.isApiConfigured()) {
       console.log(
-        `[PartageonsLeauClient] Mock update last_run_at=${params.lastRunAt} for point ${params.sourcePointId} in context ${params.contextId} (declarant ${params.declarantId}).`,
+        `[PartageonsLeauClient] Mock update last_run_at=${parameters.lastRunAt} for point ${parameters.sourcePointId} in context ${parameters.contextId} (declarant ${parameters.declarantId}).`,
       )
       return
     }
 
     await this.postJson(
-      `/service-accounts/declarants/${encodeURIComponent(params.declarantId)}/context/${encodeURIComponent(params.contextId)}/points/${encodeURIComponent(params.sourcePointId)}/last-run`,
+      `/service-accounts/declarants/${encodeURIComponent(parameters.declarantId)}/context/${encodeURIComponent(parameters.contextId)}/points/${encodeURIComponent(parameters.sourcePointId)}/last-run`,
       {
-        last_run_at: params.lastRunAt,
+        last_run_at: parameters.lastRunAt,
       },
-      params.declarantToken,
+      parameters.declarantToken,
     )
   }
 
-  private async getJson<T>(path: string, bearerToken: string): Promise<T> {
+  /**
+   * Endpoint Partageons l'eau cible (a implementer plus tard):
+   *
+   * But:
+   * - Envoyer le resultat normalise d'un connecteur pour ingestion.
+   * - La payload est celle produite par la pipeline ConnectorOutput.
+   *
+   */
+  async ingest(output: ConnectorOutput): Promise<void> {
+    // TODO: remplacer par le POST d'ingestion vers la plateforme.
+    const metricCount = output.data.metrics.length
+    const valueCount = output.data.metrics.reduce(
+      (total, metric) => total + metric.values.length,
+      0,
+    )
+    console.log(
+      `[PartageonsLeauClient] Ingesting ${metricCount} metrics (${valueCount} values) for service account: ${output.serviceAccount} and source point: ${output.sourcePointId}`,
+    )
+  }
+
+  private isApiConfigured(): boolean {
+    return Boolean(this.baseUrl && this.clientId && this.clientSecret)
+  }
+
+  private async getJson(path: string, bearerToken: string): Promise<unknown> {
     if (!this.baseUrl) {
       throw new Error('[PartageonsLeauClient] Missing PLE_BASE_URL.')
     }
@@ -143,14 +224,14 @@ export class PartageonsLeauClient {
       )
     }
 
-    return response.json() as Promise<T>
+    return response.json()
   }
 
-  private async postJson<T>(
+  private async postJson(
     path: string,
     body: Record<string, unknown>,
     bearerToken?: string,
-  ): Promise<T> {
+  ): Promise<unknown> {
     if (!this.baseUrl) {
       throw new Error('[PartageonsLeauClient] Missing PLE_BASE_URL.')
     }
@@ -176,26 +257,6 @@ export class PartageonsLeauClient {
       )
     }
 
-    return response.json() as Promise<T>
-  }
-
-  /**
-   * Endpoint Partageons l'eau cible (a implementer plus tard):
-   *
-   * But:
-   * - Envoyer le resultat normalise d'un connecteur pour ingestion.
-   * - La payload est celle produite par la pipeline ConnectorOutput.
-   *
-   */
-  async ingest(output: ConnectorOutput): Promise<void> {
-    // TODO: remplacer par le POST d'ingestion vers la plateforme.
-    const metricCount = output.data.metrics.length
-    const valueCount = output.data.metrics.reduce(
-      (total, metric) => total + metric.values.length,
-      0,
-    )
-    console.log(
-      `[PartageonsLeauClient] Ingesting ${metricCount} metrics (${valueCount} values) for service account: ${output.serviceAccount} and source point: ${output.sourcePointId}`,
-    )
+    return response.json()
   }
 }

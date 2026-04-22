@@ -1,6 +1,75 @@
 import {type BaseConnector} from '../connectors/base-connector.js'
 import {PartageonsLeauClient} from '../services/partageonsleau-client.js'
 
+async function processPoint(parameters: {
+  connectorRegistry: Map<string, BaseConnector>
+  partageonsLeauClient: PartageonsLeauClient
+  serviceAccount: string
+  declarantId: string
+  contextId: string
+  declarantToken: string
+  point: {
+    connector: string
+    sourcePointId: string
+    lastRunAt: string | undefined
+    mostRecentAvailableDate: string | undefined
+    sourceFiles?: string[]
+  }
+}): Promise<void> {
+  const {
+    connectorRegistry,
+    partageonsLeauClient,
+    serviceAccount,
+    declarantId,
+    contextId,
+    declarantToken,
+    point,
+  } = parameters
+
+  const {
+    connector: connectorName,
+    sourcePointId,
+    lastRunAt,
+    mostRecentAvailableDate,
+    sourceFiles,
+  } = point
+  const connector = connectorRegistry.get(connectorName)
+
+  if (!connector) {
+    console.error(
+      `[PullUpdatedData] Connecteur introuvable pour le point source : ${sourcePointId} (connecteur : ${connectorName})`,
+    )
+    return
+  }
+
+  try {
+    const output = await connector.run({
+      serviceAccount,
+      sourcePointId,
+      lastRunAt,
+      most_recent_available_date: mostRecentAvailableDate,
+      sourceFiles,
+    })
+
+    await partageonsLeauClient.ingest(output)
+    await partageonsLeauClient.updatePointLastRunAt({
+      declarantId,
+      contextId,
+      sourcePointId,
+      lastRunAt: output.generatedAt,
+      declarantToken,
+    })
+    console.log(
+      `[PullUpdatedData] Données ingérées et last_run_at mis à jour pour le point source : ${sourcePointId}`,
+    )
+  } catch (error) {
+    console.error(
+      `[PullUpdatedData] Échec de l'exécution du connecteur pour le point source ${sourcePointId} :`,
+      error,
+    )
+  }
+}
+
 /**
  * Effectue une synchronisation des données pour chaque compte service via les connecteurs disponibles.
  */
@@ -15,7 +84,7 @@ export async function pullUpdatedData(
 
   // Récupère la liste des comptes service disponibles
   console.log('[PullUpdatedData] Recherche des comptes service disponibles...')
-  
+
   const availableServiceAccounts =
     await partageonsLeauClient.getAvailableServiceAccounts()
   console.log(
@@ -26,10 +95,11 @@ export async function pullUpdatedData(
     console.log(`[PullUpdatedData] Auth service account : ${serviceAccount}`)
     const serviceAccountToken =
       await partageonsLeauClient.getServiceAccountToken(serviceAccount)
-    const declarants = await partageonsLeauClient.getDeclarantsForServiceAccount(
-      serviceAccount,
-      serviceAccountToken,
-    )
+    const declarants =
+      await partageonsLeauClient.getDeclarantsForServiceAccount(
+        serviceAccount,
+        serviceAccountToken,
+      )
 
     console.log(
       `[PullUpdatedData] Nombre de déclarants pour ${serviceAccount} : ${declarants.length}`,
@@ -58,48 +128,15 @@ export async function pullUpdatedData(
         )
 
         for (const point of context.points) {
-          const {
-            connector: connectorName,
-            sourcePointId,
-            lastRunAt,
-            most_recent_available_date,
-            sourceFiles,
-          } = point
-          const connector = connectorRegistry.get(connectorName)
-
-          if (!connector) {
-            console.error(
-              `[PullUpdatedData] Connecteur introuvable pour le point source : ${sourcePointId} (connecteur : ${connectorName})`,
-            )
-            continue
-          }
-
-          try {
-            const output = await connector.run({
-              serviceAccount,
-              sourcePointId,
-              lastRunAt,
-              most_recent_available_date,
-              sourceFiles,
-            })
-
-            await partageonsLeauClient.ingest(output)
-            await partageonsLeauClient.updatePointLastRunAt({
-              declarantId: declarant.id,
-              contextId: context.contextId,
-              sourcePointId,
-              lastRunAt: output.generatedAt,
-              declarantToken,
-            })
-            console.log(
-              `[PullUpdatedData] Données ingérées et last_run_at mis à jour pour le point source : ${sourcePointId}`,
-            )
-          } catch (error) {
-            console.error(
-              `[PullUpdatedData] Échec de l'exécution du connecteur pour le point source ${sourcePointId} :`,
-              error,
-            )
-          }
+          await processPoint({
+            connectorRegistry,
+            partageonsLeauClient,
+            serviceAccount,
+            declarantId: declarant.id,
+            contextId: context.contextId,
+            declarantToken,
+            point,
+          })
         }
       }
     }

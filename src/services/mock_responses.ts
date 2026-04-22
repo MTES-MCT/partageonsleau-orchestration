@@ -5,7 +5,6 @@ export type MockDeclarant = {
   name: string
 }
 
-
 export const declarantsByServiceAccount: Record<string, MockDeclarant[]> = {
   service_account_primaire: [
     {
@@ -15,8 +14,9 @@ export const declarantsByServiceAccount: Record<string, MockDeclarant[]> = {
   ],
 }
 
-export const availableServiceAccounts: string[] = Object.keys(declarantsByServiceAccount)
-
+export const availableServiceAccounts: string[] = Object.keys(
+  declarantsByServiceAccount,
+)
 
 export const contextsByDeclarant: Record<string, DeclarantContext[]> = {
   decl_blv_0: [
@@ -27,7 +27,7 @@ export const contextsByDeclarant: Record<string, DeclarantContext[]> = {
           sourcePointId: 'aedd02ee-6876-4afc-91bc-b2a9a142b79f',
           connector: 'willie',
           lastRunAt: undefined,
-          most_recent_available_date: undefined,
+          mostRecentAvailableDate: undefined,
         },
       ],
     },
@@ -38,7 +38,7 @@ export const contextsByDeclarant: Record<string, DeclarantContext[]> = {
           sourcePointId: 'urn:lo:nsid:imei:359404232376831',
           connector: 'orange_live_objects',
           lastRunAt: undefined,
-          most_recent_available_date: undefined,
+          mostRecentAvailableDate: undefined,
         },
       ],
     },
@@ -49,14 +49,14 @@ export const contextsByDeclarant: Record<string, DeclarantContext[]> = {
           sourcePointId: '38-0852',
           connector: 'aquasys',
           lastRunAt: undefined,
-          most_recent_available_date: undefined,
+          mostRecentAvailableDate: undefined,
           sourceFiles: ['data/Dossiers_Consommations_30092024-31122025.xlsx'],
         },
         {
           sourcePointId: '38-0854',
           connector: 'aquasys',
           lastRunAt: undefined,
-          most_recent_available_date: undefined,
+          mostRecentAvailableDate: undefined,
           sourceFiles: ['data/Dossiers_Consommations_30092024-31122025.xlsx'],
         },
       ],

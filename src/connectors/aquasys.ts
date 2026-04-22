@@ -1,4 +1,6 @@
-import {BaseConnector} from './base-connector.js'
+import fs from 'node:fs/promises'
+import path from 'node:path'
+import * as XLSX from 'xlsx'
 import {
   Granularity,
   MetricType,
@@ -7,15 +9,13 @@ import {
   type ConnectorRunContext,
   type ParsedPointPayload,
 } from './types.js'
-import fs from 'node:fs/promises'
-import path from 'node:path'
-import * as XLSX from 'xlsx'
+import {BaseConnector} from './base-connector.js'
 
 type AquasysRawRow = {
   sourceFile: string
   sourcePointId: string
   metricType: MetricType
-  date: string
+  date: Date
   value: number
 }
 
@@ -55,31 +55,6 @@ export class AquasysConnector extends BaseConnector {
     }
   }
 
-  private isIncrementalRecord(
-    row: AquasysRawRow,
-    context: ConnectorRunContext,
-  ): boolean {
-    const mostRecentDate = context.most_recent_available_date
-    if (!mostRecentDate) {
-      return true
-    }
-
-    const thresholdTime = Date.parse(mostRecentDate)
-    if (Number.isNaN(thresholdTime)) {
-      console.warn(
-        `[${this.name}] Invalid most_recent_available_date "${mostRecentDate}" for source point "${context.sourcePointId}". Falling back to full dataset.`,
-      )
-      return true
-    }
-
-    const rowTime = Date.parse(row.date)
-    if (Number.isNaN(rowTime)) {
-      return false
-    }
-
-    return rowTime > thresholdTime
-  }
-
   protected async parse(
     rawData: unknown,
     context: ConnectorRunContext,
@@ -106,6 +81,26 @@ export class AquasysConnector extends BaseConnector {
     }
   }
 
+  private isIncrementalRecord(
+    row: AquasysRawRow,
+    context: ConnectorRunContext,
+  ): boolean {
+    const mostRecentDate = context.most_recent_available_date
+    if (!mostRecentDate) {
+      return true
+    }
+
+    const thresholdTime = Date.parse(mostRecentDate)
+    if (Number.isNaN(thresholdTime)) {
+      console.warn(
+        `[${this.name}] Invalid most_recent_available_date "${mostRecentDate}" for source point "${context.sourcePointId}". Falling back to full dataset.`,
+      )
+      return true
+    }
+
+    return row.date.getTime() > thresholdTime
+  }
+
   private getSourceFiles(context: ConnectorRunContext): string[] {
     if (context.sourceFiles && context.sourceFiles.length > 0) {
       return context.sourceFiles
@@ -114,7 +109,9 @@ export class AquasysConnector extends BaseConnector {
     return ['data/Dossiers_Consommations_30092024-31122025.xlsx']
   }
 
-  private async readRowsFromWorkbook(filePath: string): Promise<AquasysRawRow[]> {
+  private async readRowsFromWorkbook(
+    filePath: string,
+  ): Promise<AquasysRawRow[]> {
     const absolutePath = path.resolve(filePath)
     const buffer = await fs.readFile(absolutePath)
     const workbook = XLSX.read(buffer, {type: 'buffer'})
@@ -173,15 +170,31 @@ export class AquasysConnector extends BaseConnector {
     return undefined
   }
 
-  private parseDate(rawDate: string): string | undefined {
+  private parseDate(rawDate: string): Date | undefined {
     const dateText = String(rawDate).trim()
-    const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(dateText)
-    if (!match) {
+    const parts = dateText.split('/')
+    if (parts.length !== 3) {
       return undefined
     }
 
-    const [, day, month, year] = match
-    return `${year}-${month}-${day}T00:00:00.000Z`
+    const [day, month, year] = parts
+    if (
+      !day ||
+      !month ||
+      !year ||
+      day.length !== 2 ||
+      month.length !== 2 ||
+      year.length !== 4
+    ) {
+      return undefined
+    }
+
+    const parsedDate = new Date(`${year}-${month}-${day}T00:00:00.000Z`)
+    if (Number.isNaN(parsedDate.getTime())) {
+      return undefined
+    }
+
+    return parsedDate
   }
 
   private parseNumber(rawValue: string | number): number | undefined {
@@ -189,7 +202,7 @@ export class AquasysConnector extends BaseConnector {
       return rawValue
     }
 
-    const cleaned = String(rawValue).replaceAll(/\s+/g, '').replace(',', '.')
+    const cleaned = String(rawValue).replaceAll(' ', '').replace(',', '.')
     const parsed = Number(cleaned)
     if (!Number.isFinite(parsed)) {
       return undefined
@@ -227,29 +240,40 @@ export class AquasysConnector extends BaseConnector {
       }
     }
 
-    const byType = new Map<MetricType, Array<{date: string; value: number}>>()
+    const byType = new Map<MetricType, Array<{date: Date; value: number}>>()
     for (const record of records) {
       const values = byType.get(record.metricType) ?? []
-      values.push({date: record.date, value: record.value})
+      const nextValue = {date: record.date, value: record.value}
+      const insertIndex = values.findIndex(
+        (value) => value.date.getTime() > nextValue.date.getTime(),
+      )
+      if (insertIndex === -1) {
+        values.push(nextValue)
+      } else {
+        values.splice(insertIndex, 0, nextValue)
+      }
+
       byType.set(record.metricType, values)
     }
 
-    const metrics = Array.from(byType.entries()).map(([type, values]) => ({
+    const metrics = [...byType.entries()].map(([type, values]) => ({
       type,
       granularity: Granularity.MONTH,
-      values: values.sort((a, b) => a.date.localeCompare(b.date)),
+      values: values.map((value) => ({
+        date: value.date.toISOString(),
+        value: value.value,
+      })),
       unit: MetricUnit.M3,
     }))
 
-    const dates = records.map((record) => record.date)
+    const {minDate, maxDate} = this.getMinMaxDates(
+      records,
+      (record) => record.date,
+    )
     return {
       metrics,
-      minDate: dates.reduce((currentMin, date) =>
-        date < currentMin ? date : currentMin,
-      ),
-      maxDate: dates.reduce((currentMax, date) =>
-        date > currentMax ? date : currentMax,
-      ),
+      minDate,
+      maxDate,
     }
   }
 }

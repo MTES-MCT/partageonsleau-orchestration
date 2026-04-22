@@ -16,16 +16,26 @@ type OrangeLiveObjectsRecord = {
   }
 }
 
+type OrangeMetricValue = {
+  date: Date
+  value: number
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
 
-function isOrangeLiveObjectsRecord(value: unknown): value is OrangeLiveObjectsRecord {
+function isOrangeLiveObjectsRecord(
+  value: unknown,
+): value is OrangeLiveObjectsRecord {
   if (!isRecord(value)) {
     return false
   }
 
-  if (typeof value.streamId !== 'string' || typeof value.timestamp !== 'string') {
+  if (
+    typeof value.streamId !== 'string' ||
+    typeof value.timestamp !== 'string'
+  ) {
     return false
   }
 
@@ -118,7 +128,14 @@ export class OrangeLiveObjectsConnector extends BaseConnector {
     }
 
     const mappedValues = this.mapRecordsToMetricValues(rawData)
-    const {minDate, maxDate} = this.getMinMaxDates(mappedValues)
+    const {minDate, maxDate} = this.getMinMaxDates(
+      mappedValues,
+      (value) => value.date,
+    )
+    const serializedValues = mappedValues.map((value) => ({
+      date: value.date.toISOString(),
+      value: value.value,
+    }))
 
     return {
       id_point_de_prelevement: context.sourcePointId,
@@ -135,7 +152,7 @@ export class OrangeLiveObjectsConnector extends BaseConnector {
         {
           type: MetricType.VOLUME_PRELEVE,
           granularity: Granularity.DAY,
-          values: mappedValues,
+          values: serializedValues,
           unit: MetricUnit.M3,
         },
       ],
@@ -144,42 +161,25 @@ export class OrangeLiveObjectsConnector extends BaseConnector {
 
   private mapRecordsToMetricValues(
     records: OrangeLiveObjectsRecord[],
-  ): Array<{date: string; value: number}> {
+  ): OrangeMetricValue[] {
     return records.flatMap((record) => {
       const sensorValue = record.value.genericSensor?.['1']?.sensorValue
       if (typeof sensorValue !== 'number') {
         return []
       }
 
+      const date = new Date(record.timestamp)
+      if (Number.isNaN(date.getTime())) {
+        return []
+      }
+
       return [
         {
-          date: record.timestamp,
+          date,
           value: sensorValue,
         },
       ]
     })
-  }
-
-  private getMinMaxDates(values: Array<{date: string; value: number}>): {
-    minDate: string | undefined
-    maxDate: string | undefined
-  } {
-    if (values.length === 0) {
-      return {
-        minDate: undefined,
-        maxDate: undefined,
-      }
-    }
-
-    const dates = values.map((item) => item.date)
-    return {
-      minDate: dates.reduce((currentMin, date) =>
-        date < currentMin ? date : currentMin,
-      ),
-      maxDate: dates.reduce((currentMax, date) =>
-        date > currentMax ? date : currentMax,
-      ),
-    }
   }
 
   private getStartDate(context: ConnectorRunContext): string {

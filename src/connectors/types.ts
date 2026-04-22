@@ -6,7 +6,7 @@ export type ServiceAccountPointContext = {
   sourcePointId: string
   connector: string
   lastRunAt: string | undefined
-  most_recent_available_date: string | undefined
+  mostRecentAvailableDate: string | undefined
   sourceFiles?: string[]
 }
 

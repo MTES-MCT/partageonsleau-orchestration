@@ -6,3 +6,4 @@ Dockerfile
 npm-debug.log
 .env
 data/
+.vscode/
