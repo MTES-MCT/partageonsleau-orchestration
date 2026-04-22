@@ -1,8 +1,9 @@
 import {BaseConnector} from './base-connector.js'
 import {
-  MetricFrequency,
+  Granularity,
   MetricType,
   MetricUnit,
+  SourceType,
   type ConnectorRunContext,
   type ParsedPointPayload,
 } from './types.js'
@@ -76,7 +77,7 @@ export class WillieConnector extends BaseConnector {
     }
 
     const query = new URLSearchParams({
-      stationIds: context.pointId,
+      stationIds: context.sourcePointId,
       startDate: this.getStartDate(context.lastRunAt),
       endDate: new Date().toISOString(),
       resolution: 'day',
@@ -103,35 +104,103 @@ export class WillieConnector extends BaseConnector {
     rawData: unknown,
     context: ConnectorRunContext,
   ): Promise<ParsedPointPayload> {
+    // 1) Valider strictement la shape de la reponse brute Willie.
     if (!isWillieConsumptionResponse(rawData)) {
-      return {
-        id_point_de_prelevement: context.pointId,
-        metrics: [],
-      }
+      throw new Error(
+        `[${this.name}] Invalid Willie response format for service account "${context.serviceAccount}" and source point "${context.sourcePointId}".`,
+      )
     }
 
-    const station = rawData.stations.find(
-      (item) => item.stationID === context.pointId,
-    )
-    const datapoints = station?.datapoints ?? []
+    // 2) Isoler la station cible (point PLE) dans la reponse (il n'y en a qu'une normalement).
+    const station = this.getStationForPoint(rawData, context)
+    const datapoints = station.datapoints
 
+    // 3) Construire les metadonnees temporelles globales du lot.
+    const {minDate, maxDate} = this.getMinMaxDates(datapoints)
+
+    // 4) Mapper les datapoints Willie vers le contrat metrique PLE.
     return {
-      id_point_de_prelevement: context.pointId,
+      id_point_de_prelevement: context.sourcePointId,
+      source_type: SourceType.API,
+      source_metadata: {
+        provider: 'willie',
+        endpoint: WillieConnector.endpoint,
+        resolution: 'day',
+        station_id: station.stationID,
+      },
+      min_date: minDate,
+      max_date: maxDate,
       metrics: [
         {
           type: MetricType.VOLUME_PRELEVE,
-          frequency: MetricFrequency.DAY,
-          values: datapoints.map((datapoint) => ({
-            date: datapoint.dateTime,
-            value: datapoint.consumption,
-          })),
+          granularity: Granularity.DAY,
+          values: this.mapDatapointsToMetricValues(datapoints),
           unit: MetricUnit.M3,
         },
       ],
     }
   }
 
-  private getStartDate(lastRunAt: string | null | undefined): string {
+  /**
+   * Retourne la station correspondant au point PLE.
+   * On fail-fast si la station n'est pas presente dans la reponse Willie.
+   */
+  private getStationForPoint(
+    response: WillieConsumptionResponse,
+    context: ConnectorRunContext,
+  ): WillieStation {
+    const station = response.stations.find(
+      (item) => item.stationID === context.sourcePointId,
+    )
+    if (!station) {
+      throw new Error(
+        `[${this.name}] Station "${context.sourcePointId}" not found in Willie response for service account "${context.serviceAccount}".`,
+      )
+    }
+
+    return station
+  }
+
+  /**
+   * Extrait min/max date a partir des datapoints retournes par Willie.
+   * Retourne undefined si la liste est vide.
+   */
+  private getMinMaxDates(datapoints: WillieDatapoint[]): {
+    minDate: string | undefined
+    maxDate: string | undefined
+  } {
+    const dates = datapoints.map((datapoint) => datapoint.dateTime)
+    if (dates.length === 0) {
+      return {
+        minDate: undefined,
+        maxDate: undefined,
+      }
+    }
+
+    return {
+      minDate: dates.reduce((currentMin, date) =>
+        date < currentMin ? date : currentMin,
+      ),
+      maxDate: dates.reduce((currentMax, date) =>
+        date > currentMax ? date : currentMax,
+      ),
+    }
+  }
+
+  /**
+   * Mappe les datapoints Willie vers le format `TimeserieValue` du contrat PLE.
+   */
+  private mapDatapointsToMetricValues(datapoints: WillieDatapoint[]): Array<{
+    date: string
+    value: number
+  }> {
+    return datapoints.map((datapoint) => ({
+      date: datapoint.dateTime,
+      value: datapoint.consumption,
+    }))
+  }
+
+  private getStartDate(lastRunAt: string | undefined): string {
     if (lastRunAt) {
       return new Date(lastRunAt).toISOString()
     }

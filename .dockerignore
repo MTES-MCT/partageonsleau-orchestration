@@ -5,3 +5,4 @@ dist
 Dockerfile
 npm-debug.log
 .env
+data/

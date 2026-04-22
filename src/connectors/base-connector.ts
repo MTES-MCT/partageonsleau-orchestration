@@ -9,16 +9,15 @@ export abstract class BaseConnector {
 
   async run(context: ConnectorRunContext): Promise<ConnectorOutput> {
     console.log(
-      `[${this.name}] Running connector for point: ${context.pointId}`,
+      `[${this.name}] Running connector for source point: ${context.sourcePointId}`,
     )
     const rawData = await this.fetchSourceData(context)
-    console.log(rawData)
     const parsedData = await this.parse(rawData, context)
 
     return {
       connector: this.name,
       serviceAccount: context.serviceAccount,
-      pointId: context.pointId,
+      sourcePointId: context.sourcePointId,
       generatedAt: new Date().toISOString(),
       data: parsedData,
     }

@@ -7,10 +7,11 @@ Orchestrateur TypeScript pour recuperer des donnees metier (connecteurs externes
 Le job principal:
 
 1. recupere la liste des service accounts disponibles
-2. recupere le contexte de chaque service account (points autorises, connecteur, last run)
-3. execute le connecteur associe pour chaque point
-4. transforme la donnee vers un format commun
-5. envoie le resultat vers PLE pour ingestion
+2. genere un JWT du service account
+3. recupere la liste des declarants autorises
+4. pour chaque declarant, genere un JWT declarant puis recupere ses contextes
+5. execute le connecteur associe pour chaque point de chaque contexte
+6. transforme la donnee vers un format commun puis envoie le resultat vers PLE
 
 ## Stack
 
@@ -31,6 +32,10 @@ Copier `.env.example` vers `.env` puis renseigner les variables.
 Variables actuellement utilisees:
 
 - `WILLIE_API_TOKEN`: token Bearer pour l'API Willie
+- `ORANGE_LIVE_OBJECTS_API_KEY`: cle API pour l'API Orange Live Objects
+- `PLE_BASE_URL`: URL de base de l'API Partageons l'eau (optionnel tant que le mode mock est actif)
+- `CLIENT_ID`: identifiant client pour generer le JWT service account
+- `CLIENT_SECRET`: secret client pour generer le JWT service account
 
 ## Scripts
 
@@ -68,7 +73,7 @@ Le connecteur Willie interroge:
 
 Parametres utilises:
 
-- `stationIds` = `pointId`
+- `stationIds` = `sourcePointId` (station_id Willie)
 - `startDate` = `lastRunAt` (ou fallback)
 - `endDate` = maintenant
 - `resolution` = `day`
