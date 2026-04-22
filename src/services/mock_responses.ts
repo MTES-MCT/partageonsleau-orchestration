@@ -57,6 +57,17 @@ export const contextsByDeclarant: Record<string, DeclarantContext[]> = {
         },
       ],
     },
+    {
+      contextId: 'template_file_blv_0',
+      points: [
+        {
+          sourcePointId: "Captages de l'Iles (Manthes) - Forage profond",
+          connector: 'template_file',
+          mostRecentAvailableDate: undefined,
+          sourceFile: 'data/declaration_valloire_gallaure_11_2025.xlsx',
+        },
+      ],
+    },
   ],
   decl_empty_0: [
     {
