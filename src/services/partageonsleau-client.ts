@@ -18,7 +18,19 @@ function isMockDeclarant(value: unknown): value is MockDeclarant {
   )
 }
 
-function isDeclarantContext(value: unknown): value is DeclarantContext {
+type DeclarantContextPayload = {
+  contextId: string
+  points: Array<{
+    sourcePointId: string
+    connector: string
+    mostRecentAvailableDate: string | undefined
+    sourceFile: string
+  }>
+}
+
+function isDeclarantContextPayload(
+  value: unknown,
+): value is DeclarantContextPayload {
   if (!isRecord(value) || typeof value.contextId !== 'string') {
     return false
   }
@@ -32,14 +44,24 @@ function isDeclarantContext(value: unknown): value is DeclarantContext {
       isRecord(point) &&
       typeof point.sourcePointId === 'string' &&
       typeof point.connector === 'string' &&
-      (point.lastRunAt === undefined || typeof point.lastRunAt === 'string') &&
       (point.mostRecentAvailableDate === undefined ||
         typeof point.mostRecentAvailableDate === 'string') &&
-      (point.sourceFiles === undefined ||
-        (Array.isArray(point.sourceFiles) &&
-          point.sourceFiles.every((item) => typeof item === 'string')))
+      (point.sourceFile === undefined || typeof point.sourceFile === 'string')
     )
   })
+}
+
+function toOptionalDate(value: string | undefined): Date | undefined {
+  if (!value) {
+    return undefined
+  }
+
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) {
+    return undefined
+  }
+
+  return parsed
 }
 
 export class PartageonsLeauClient {
@@ -153,9 +175,21 @@ export class PartageonsLeauClient {
       return []
     }
 
-    return response.data.filter((item): item is DeclarantContext =>
-      isDeclarantContext(item),
-    )
+    return response.data
+      .filter((item): item is DeclarantContextPayload =>
+        isDeclarantContextPayload(item),
+      )
+      .map((context) => ({
+        contextId: context.contextId,
+        points: context.points.map((point) => ({
+          sourcePointId: point.sourcePointId,
+          connector: point.connector,
+          mostRecentAvailableDate: toOptionalDate(
+            point.mostRecentAvailableDate,
+          ),
+          sourceFile: point.sourceFile,
+        })),
+      }))
   }
 
   async updatePointLastRunAt(parameters: {

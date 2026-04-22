@@ -40,13 +40,24 @@ type WillieRawConsumptionResponse = {
   unknownStationIds: string[]
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+const willieResolutionByGranularity = {
+  [Granularity.HOUR]: 'hour',
+  [Granularity.DAY]: 'day',
+  [Granularity.WEEK]: 'week',
+  [Granularity.MONTH]: 'month',
+  [Granularity.YEAR]: 'year',
+} as const satisfies Record<
+  Exclude<Granularity, Granularity.FIFTEEN_MINUTES>,
+  string
+>
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
 
 function isWillieRawDatapoint(value: unknown): value is WillieRawDatapoint {
   return (
-    isRecord(value) &&
+    isObjectRecord(value) &&
     typeof value.dateTime === 'string' &&
     typeof value.consumption === 'number'
   )
@@ -54,7 +65,7 @@ function isWillieRawDatapoint(value: unknown): value is WillieRawDatapoint {
 
 function isWillieRawStation(value: unknown): value is WillieRawStation {
   return (
-    isRecord(value) &&
+    isObjectRecord(value) &&
     typeof value.stationID === 'string' &&
     Array.isArray(value.datapoints) &&
     value.datapoints.every((datapoint) => isWillieRawDatapoint(datapoint))
@@ -65,7 +76,7 @@ function isWillieRawConsumptionResponse(
   value: unknown,
 ): value is WillieRawConsumptionResponse {
   return (
-    isRecord(value) &&
+    isObjectRecord(value) &&
     Array.isArray(value.stations) &&
     value.stations.every((station) => isWillieRawStation(station)) &&
     typeof value.count === 'number' &&
@@ -74,17 +85,52 @@ function isWillieRawConsumptionResponse(
   )
 }
 
-export class WillieConnector extends BaseConnector {
+function granularityToWillieResolution(granularity: Granularity): string {
+  if (granularity === Granularity.FIFTEEN_MINUTES) {
+    throw new Error(
+      '[WillieConnector] Granularity "15_minutes" is not supported by Willie API.',
+    )
+  }
+
+  return willieResolutionByGranularity[granularity]
+}
+
+/**
+ * Retourne la station correspondant au point PLE.
+ * On fail-fast si la station n'est pas presente dans la reponse Willie.
+ */
+function assertAndGetStationForPoint(
+  response: WillieConsumptionResponse,
+  context: ConnectorRunContext,
+): WillieStation {
+  const station = response.stations.find(
+    (item) => item.stationID === context.sourcePointId,
+  )
+  if (!station) {
+    throw new Error(
+      `[willie] Station "${context.sourcePointId}" not found in Willie response for service account "${context.serviceAccount}".`,
+    )
+  }
+
+  return station
+}
+
+export class WillieConnector extends BaseConnector<
+  unknown,
+  WillieConsumptionResponse
+> {
   private static readonly endpoint =
     'https://api.meetwillie.com/v1/stations/consumption'
+
+  private static readonly granularity = Granularity.HOUR
+  // Idéalement configurable par clé d'API (incompatible avec le modèle actuel)
+  private static readonly connectorEnabledDate = new Date('2026-01-01')
 
   constructor() {
     super('willie')
   }
 
-  protected async fetchSourceData(
-    context: ConnectorRunContext,
-  ): Promise<unknown> {
+  protected async fetch(context: ConnectorRunContext): Promise<unknown> {
     const apiToken = process.env.WILLIE_API_TOKEN
     if (!apiToken) {
       throw new Error(
@@ -94,9 +140,11 @@ export class WillieConnector extends BaseConnector {
 
     const query = new URLSearchParams({
       stationIds: context.sourcePointId,
-      startDate: this.getStartDate(context.lastRunAt),
+      startDate: this.getStartDate(
+        context.mostRecentAvailableDate,
+      ).toISOString(),
       endDate: new Date().toISOString(),
-      resolution: 'day',
+      resolution: granularityToWillieResolution(WillieConnector.granularity),
     })
 
     const response = await fetch(`${WillieConnector.endpoint}?${query}`, {
@@ -119,87 +167,14 @@ export class WillieConnector extends BaseConnector {
   protected async parse(
     rawData: unknown,
     context: ConnectorRunContext,
-  ): Promise<ParsedPointPayload> {
-    // 1) Valider strictement la shape de la reponse brute Willie.
+  ): Promise<WillieConsumptionResponse> {
     if (!isWillieRawConsumptionResponse(rawData)) {
       throw new Error(
         `[${this.name}] Invalid Willie response format for service account "${context.serviceAccount}" and source point "${context.sourcePointId}".`,
       )
     }
 
-    const response = this.normalizeResponse(rawData, context)
-
-    // 2) Isoler la station cible (point PLE) dans la reponse (il n'y en a qu'une normalement).
-    const station = this.getStationForPoint(response, context)
-    const {datapoints} = station
-
-    // 3) Construire les metadonnees temporelles globales du lot.
-    const {minDate, maxDate} = this.getMinMaxDates(
-      datapoints,
-      (datapoint) => datapoint.dateTime,
-    )
-
-    // 4) Mapper les datapoints Willie vers le contrat metrique PLE.
-    return {
-      id_point_de_prelevement: context.sourcePointId,
-      source_type: SourceType.API,
-      source_metadata: {
-        provider: 'willie',
-        endpoint: WillieConnector.endpoint,
-        resolution: 'day',
-        station_id: station.stationID,
-      },
-      min_date: minDate,
-      max_date: maxDate,
-      metrics: [
-        {
-          type: MetricType.VOLUME_PRELEVE,
-          granularity: Granularity.DAY,
-          values: this.mapDatapointsToMetricValues(datapoints),
-          unit: MetricUnit.M3,
-        },
-      ],
-    }
-  }
-
-  /**
-   * Retourne la station correspondant au point PLE.
-   * On fail-fast si la station n'est pas presente dans la reponse Willie.
-   */
-  private getStationForPoint(
-    response: WillieConsumptionResponse,
-    context: ConnectorRunContext,
-  ): WillieStation {
-    const station = response.stations.find(
-      (item) => item.stationID === context.sourcePointId,
-    )
-    if (!station) {
-      throw new Error(
-        `[${this.name}] Station "${context.sourcePointId}" not found in Willie response for service account "${context.serviceAccount}".`,
-      )
-    }
-
-    return station
-  }
-
-  /**
-   * Mappe les datapoints Willie vers le format `TimeserieValue` du contrat PLE.
-   */
-  private mapDatapointsToMetricValues(datapoints: WillieDatapoint[]): Array<{
-    date: string
-    value: number
-  }> {
-    return datapoints.map((datapoint) => ({
-      date: datapoint.dateTime.toISOString(),
-      value: datapoint.consumption,
-    }))
-  }
-
-  private normalizeResponse(
-    response: WillieRawConsumptionResponse,
-    context: ConnectorRunContext,
-  ): WillieConsumptionResponse {
-    const stations = response.stations.map((station) => ({
+    const stations = rawData.stations.map((station) => ({
       stationID: station.stationID,
       datapoints: station.datapoints
         .map((datapoint) => {
@@ -223,18 +198,62 @@ export class WillieConnector extends BaseConnector {
 
     return {
       stations,
-      count: response.count,
-      unknownStationIds: response.unknownStationIds,
+      count: rawData.count,
+      unknownStationIds: rawData.unknownStationIds,
     }
   }
 
-  private getStartDate(lastRunAt: string | undefined): string {
-    if (lastRunAt) {
-      return new Date(lastRunAt).toISOString()
-    }
+  protected async process(
+    parsedData: WillieConsumptionResponse,
+    context: ConnectorRunContext,
+  ): Promise<ParsedPointPayload> {
+    const station = assertAndGetStationForPoint(parsedData, context)
+    const {datapoints} = station
 
-    const now = new Date()
-    now.setDate(now.getDate() - 1)
-    return now.toISOString()
+    const {minDate, maxDate} = this.getMinMaxDates(
+      datapoints,
+      (datapoint) => datapoint.dateTime,
+    )
+
+    return {
+      id_point_de_prelevement: context.sourcePointId,
+      source_type: SourceType.API,
+      source_metadata: {
+        provider: 'willie',
+        endpoint: WillieConnector.endpoint,
+        resolution: granularityToWillieResolution(WillieConnector.granularity),
+        station_id: station.stationID,
+      },
+      min_date: minDate,
+      max_date: maxDate,
+      metrics: [
+        {
+          type: MetricType.VOLUME_PRELEVE,
+          granularity: WillieConnector.granularity,
+          values: this.mapWillieDatapointsToMetricValues(datapoints),
+          unit: MetricUnit.M3,
+        },
+      ],
+    }
+  }
+
+  /**
+   * Mappe les datapoints Willie vers le format `TimeserieValue` du contrat PLE.
+   */
+  private mapWillieDatapointsToMetricValues(
+    datapoints: WillieDatapoint[],
+  ): Array<{
+    date: string
+    value: number
+  }> {
+    return datapoints.map((datapoint) => ({
+      date: datapoint.dateTime.toISOString(),
+      value: datapoint.consumption,
+    }))
+  }
+
+  private getStartDate(mostRecentAvailableDate: Date | undefined): Date {
+    // Stratégie de fetch: on récupère toute donnée plus récente que la dernière donnée disponible dans PLE.
+    return mostRecentAvailableDate ?? WillieConnector.connectorEnabledDate
   }
 }

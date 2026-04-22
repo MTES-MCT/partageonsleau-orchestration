@@ -21,14 +21,18 @@ type OrangeMetricValue = {
   value: number
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+type OrangeSourceData = {
+  values: OrangeMetricValue[]
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
 
 function isOrangeLiveObjectsRecord(
   value: unknown,
 ): value is OrangeLiveObjectsRecord {
-  if (!isRecord(value)) {
+  if (!isObjectRecord(value)) {
     return false
   }
 
@@ -39,7 +43,7 @@ function isOrangeLiveObjectsRecord(
     return false
   }
 
-  if (!isRecord(value.value)) {
+  if (!isObjectRecord(value.value)) {
     return false
   }
 
@@ -47,12 +51,12 @@ function isOrangeLiveObjectsRecord(
     return true
   }
 
-  if (!isRecord(value.value.genericSensor)) {
+  if (!isObjectRecord(value.value.genericSensor)) {
     return false
   }
 
   return Object.values(value.value.genericSensor).every((sensor) => {
-    if (!isRecord(sensor)) {
+    if (!isObjectRecord(sensor)) {
       return false
     }
 
@@ -73,17 +77,20 @@ function isOrangeLiveObjectsResponse(
   )
 }
 
-export class OrangeLiveObjectsConnector extends BaseConnector {
+export class OrangeLiveObjectsConnector extends BaseConnector<
+  unknown,
+  OrangeSourceData
+> {
   private static readonly endpoint =
     'https://liveobjects.orange-business.com/api/v0/data/streams'
+
+  private static readonly connectorEnabledDate = new Date('2026-01-01')
 
   constructor() {
     super('orange_live_objects')
   }
 
-  protected async fetchSourceData(
-    context: ConnectorRunContext,
-  ): Promise<unknown> {
+  protected async fetch(context: ConnectorRunContext): Promise<unknown> {
     const apiKey = process.env.ORANGE_LIVE_OBJECTS_API_KEY
     if (!apiKey) {
       throw new Error(
@@ -91,11 +98,11 @@ export class OrangeLiveObjectsConnector extends BaseConnector {
       )
     }
 
-    const startDate = this.getStartDate(context)
+    const startDate = this.getStartDate(context.mostRecentAvailableDate)
     const endDate = new Date().toISOString()
     const query = new URLSearchParams({
       limit: '500',
-      timeRange: `${startDate},${endDate}`,
+      timeRange: `${startDate.toISOString()},${endDate}`,
     })
     const streamId = encodeURIComponent(context.sourcePointId)
     const url = `${OrangeLiveObjectsConnector.endpoint}/${streamId}?${query}`
@@ -120,19 +127,27 @@ export class OrangeLiveObjectsConnector extends BaseConnector {
   protected async parse(
     rawData: unknown,
     context: ConnectorRunContext,
-  ): Promise<ParsedPointPayload> {
+  ): Promise<OrangeSourceData> {
     if (!isOrangeLiveObjectsResponse(rawData)) {
       throw new Error(
         `[${this.name}] Invalid Orange Live Objects response format for service account "${context.serviceAccount}" and source point "${context.sourcePointId}".`,
       )
     }
 
-    const mappedValues = this.mapRecordsToMetricValues(rawData)
+    return {
+      values: this.mapOrangeRecordsToMetricValues(rawData),
+    }
+  }
+
+  protected async process(
+    parsedData: OrangeSourceData,
+    context: ConnectorRunContext,
+  ): Promise<ParsedPointPayload> {
     const {minDate, maxDate} = this.getMinMaxDates(
-      mappedValues,
+      parsedData.values,
       (value) => value.date,
     )
-    const serializedValues = mappedValues.map((value) => ({
+    const serializedValues = parsedData.values.map((value) => ({
       date: value.date.toISOString(),
       value: value.value,
     }))
@@ -159,7 +174,7 @@ export class OrangeLiveObjectsConnector extends BaseConnector {
     }
   }
 
-  private mapRecordsToMetricValues(
+  private mapOrangeRecordsToMetricValues(
     records: OrangeLiveObjectsRecord[],
   ): OrangeMetricValue[] {
     return records.flatMap((record) => {
@@ -182,15 +197,10 @@ export class OrangeLiveObjectsConnector extends BaseConnector {
     })
   }
 
-  private getStartDate(context: ConnectorRunContext): string {
-    const referenceDate =
-      context.lastRunAt ?? context.most_recent_available_date
-    if (referenceDate) {
-      return new Date(referenceDate).toISOString()
-    }
-
-    const now = new Date()
-    now.setDate(now.getDate() - 1)
-    return now.toISOString()
+  private getStartDate(mostRecentAvailableDate: Date | undefined): Date {
+    // Stratégie de fetch: on récupère toute donnée plus récente que la dernière donnée disponible dans PLE.
+    return (
+      mostRecentAvailableDate ?? OrangeLiveObjectsConnector.connectorEnabledDate
+    )
   }
 }

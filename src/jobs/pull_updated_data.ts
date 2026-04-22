@@ -1,20 +1,15 @@
 import {type BaseConnector} from '../connectors/base-connector.js'
+import {type ServiceAccountPointContext} from '../connectors/types.js'
 import {PartageonsLeauClient} from '../services/partageonsleau-client.js'
 
 async function processPoint(parameters: {
-  connectorRegistry: Map<string, BaseConnector>
+  connectorRegistry: Map<string, BaseConnector<unknown, unknown>>
   partageonsLeauClient: PartageonsLeauClient
   serviceAccount: string
   declarantId: string
   contextId: string
   declarantToken: string
-  point: {
-    connector: string
-    sourcePointId: string
-    lastRunAt: string | undefined
-    mostRecentAvailableDate: string | undefined
-    sourceFiles?: string[]
-  }
+  point: ServiceAccountPointContext
 }): Promise<void> {
   const {
     connectorRegistry,
@@ -29,9 +24,8 @@ async function processPoint(parameters: {
   const {
     connector: connectorName,
     sourcePointId,
-    lastRunAt,
     mostRecentAvailableDate,
-    sourceFiles,
+    sourceFile,
   } = point
   const connector = connectorRegistry.get(connectorName)
 
@@ -46,9 +40,8 @@ async function processPoint(parameters: {
     const output = await connector.run({
       serviceAccount,
       sourcePointId,
-      lastRunAt,
-      most_recent_available_date: mostRecentAvailableDate,
-      sourceFiles,
+      mostRecentAvailableDate,
+      sourceFile,
     })
 
     await partageonsLeauClient.ingest(output)
@@ -74,7 +67,7 @@ async function processPoint(parameters: {
  * Effectue une synchronisation des données pour chaque compte service via les connecteurs disponibles.
  */
 export async function pullUpdatedData(
-  connectorRegistry: Map<string, BaseConnector>,
+  connectorRegistry: Map<string, BaseConnector<unknown, unknown>>,
 ) {
   console.log(
     '[PullUpdatedData] Démarrage du job de récupération de données mises à jour.',

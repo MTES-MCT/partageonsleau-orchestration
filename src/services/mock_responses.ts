@@ -26,7 +26,6 @@ export const contextsByDeclarant: Record<string, DeclarantContext[]> = {
         {
           sourcePointId: 'aedd02ee-6876-4afc-91bc-b2a9a142b79f',
           connector: 'willie',
-          lastRunAt: undefined,
           mostRecentAvailableDate: undefined,
         },
       ],
@@ -37,7 +36,6 @@ export const contextsByDeclarant: Record<string, DeclarantContext[]> = {
         {
           sourcePointId: 'urn:lo:nsid:imei:359404232376831',
           connector: 'orange_live_objects',
-          lastRunAt: undefined,
           mostRecentAvailableDate: undefined,
         },
       ],
@@ -48,16 +46,14 @@ export const contextsByDeclarant: Record<string, DeclarantContext[]> = {
         {
           sourcePointId: '38-0852',
           connector: 'aquasys',
-          lastRunAt: undefined,
           mostRecentAvailableDate: undefined,
-          sourceFiles: ['data/Dossiers_Consommations_30092024-31122025.xlsx'],
+          sourceFile: 'data/Dossiers_Consommations_30092024-31122025.xlsx',
         },
         {
           sourcePointId: '38-0854',
           connector: 'aquasys',
-          lastRunAt: undefined,
           mostRecentAvailableDate: undefined,
-          sourceFiles: ['data/Dossiers_Consommations_30092024-31122025.xlsx'],
+          sourceFile: 'data/Dossiers_Consommations_30092024-31122025.xlsx',
         },
       ],
     },

@@ -5,9 +5,8 @@ export type ConfigEntry = {
 export type ServiceAccountPointContext = {
   sourcePointId: string
   connector: string
-  lastRunAt: string | undefined
-  mostRecentAvailableDate: string | undefined
-  sourceFiles?: string[]
+  mostRecentAvailableDate: Date | undefined
+  sourceFile?: string
 }
 
 export type ServiceAccountContext = {
@@ -23,9 +22,8 @@ export type DeclarantContext = {
 export type ConnectorRunContext = {
   serviceAccount: string
   sourcePointId: string
-  lastRunAt: string | undefined
-  most_recent_available_date?: string
-  sourceFiles?: string[]
+  mostRecentAvailableDate: Date | undefined
+  sourceFile?: string
 }
 
 export type TimeserieValue = {

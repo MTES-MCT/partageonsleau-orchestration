@@ -4,15 +4,16 @@ import type {
   ParsedPointPayload,
 } from './types.js'
 
-export abstract class BaseConnector {
+export abstract class BaseConnector<TRawData, TParsedData> {
   protected constructor(public readonly name: string) {}
 
   async run(context: ConnectorRunContext): Promise<ConnectorOutput> {
     console.log(
       `[${this.name}] Running connector for source point: ${context.sourcePointId}`,
     )
-    const rawData = await this.fetchSourceData(context)
-    const parsedData = await this.parse(rawData, context)
+    const rawData = await this.fetch(context)
+    const parsedSourceData = await this.parse(rawData, context)
+    const parsedData = await this.process(parsedSourceData, context)
 
     return {
       connector: this.name,
@@ -41,12 +42,15 @@ export abstract class BaseConnector {
     }
   }
 
-  protected abstract fetchSourceData(
-    context: ConnectorRunContext,
-  ): Promise<unknown>
+  protected abstract fetch(context: ConnectorRunContext): Promise<TRawData>
 
   protected abstract parse(
-    rawData: unknown,
+    rawData: TRawData,
+    context: ConnectorRunContext,
+  ): Promise<TParsedData>
+
+  protected abstract process(
+    parsedData: TParsedData,
     context: ConnectorRunContext,
   ): Promise<ParsedPointPayload>
 }
