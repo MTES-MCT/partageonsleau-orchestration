@@ -140,9 +140,10 @@ export class WillieConnector extends BaseConnector<
 
     const query = new URLSearchParams({
       stationIds: context.sourcePointId,
-      startDate: this.getStartDate(
-        context.mostRecentAvailableDate,
-      ).toISOString(),
+      startDate: this.resolveStartDate({
+        mostRecentAvailableDate: context.mostRecentAvailableDate,
+        connectorEnabledDate: WillieConnector.connectorEnabledDate,
+      }).toISOString(),
       endDate: new Date().toISOString(),
       resolution: granularityToWillieResolution(WillieConnector.granularity),
     })
@@ -250,10 +251,5 @@ export class WillieConnector extends BaseConnector<
       date: datapoint.dateTime.toISOString(),
       value: datapoint.consumption,
     }))
-  }
-
-  private getStartDate(mostRecentAvailableDate: Date | undefined): Date {
-    // Stratégie de fetch: on récupère toute donnée plus récente que la dernière donnée disponible dans PLE.
-    return mostRecentAvailableDate ?? WillieConnector.connectorEnabledDate
   }
 }

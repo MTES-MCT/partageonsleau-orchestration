@@ -44,16 +44,15 @@ async function processPoint(parameters: {
       sourceFile,
     })
 
-    await partageonsLeauClient.ingest(output)
-    await partageonsLeauClient.updatePointLastRunAt({
+    await partageonsLeauClient.ingest({
+      output,
       declarantId,
       contextId,
-      sourcePointId,
       lastRunAt: output.generatedAt,
       declarantToken,
     })
     console.log(
-      `[PullUpdatedData] Données ingérées et last_run_at mis à jour pour le point source : ${sourcePointId}`,
+      `[PullUpdatedData] Données ingérées pour le point source : ${sourcePointId}`,
     )
   } catch (error) {
     console.error(

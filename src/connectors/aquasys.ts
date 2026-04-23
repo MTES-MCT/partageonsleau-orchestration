@@ -199,7 +199,10 @@ export class AquasysConnector extends BaseConnector<
       .filter(
         (row) =>
           row.dateStart.getTime() >
-          this.getStartDate(context.mostRecentAvailableDate).getTime(),
+          this.resolveStartDate({
+            mostRecentAvailableDate: context.mostRecentAvailableDate,
+            connectorEnabledDate: AquasysConnector.connectorEnabledDate,
+          }).getTime(),
       )
 
     return {records}
@@ -226,12 +229,6 @@ export class AquasysConnector extends BaseConnector<
       max_date: maxDate,
       metrics,
     }
-  }
-
-  private getStartDate(mostRecentAvailableDate: Date | undefined): Date {
-    // Dans un premier temps au niveau front, la mostRecentAvailableDate peut être overridée manuellement
-    // plus tard on pourrait envisager d'autres stratégies de fetch: last_x_months, since_date, ...
-    return mostRecentAvailableDate ?? AquasysConnector.connectorEnabledDate
   }
 
   private getSourceFile(context: ConnectorRunContext): string {

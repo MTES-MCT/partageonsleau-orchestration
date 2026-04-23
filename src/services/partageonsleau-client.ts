@@ -192,46 +192,50 @@ export class PartageonsLeauClient {
       }))
   }
 
-  async updatePointLastRunAt(parameters: {
-    declarantId: string
-    contextId: string
-    sourcePointId: string
-    lastRunAt: string
-    declarantToken: string
-  }): Promise<void> {
-    if (!this.isApiConfigured()) {
-      console.log(
-        `[PartageonsLeauClient] Mock update last_run_at=${parameters.lastRunAt} for point ${parameters.sourcePointId} in context ${parameters.contextId} (declarant ${parameters.declarantId}).`,
-      )
-      return
-    }
-
-    await this.postJson(
-      `/service-accounts/declarants/${encodeURIComponent(parameters.declarantId)}/context/${encodeURIComponent(parameters.contextId)}/points/${encodeURIComponent(parameters.sourcePointId)}/last-run`,
-      {
-        last_run_at: parameters.lastRunAt,
-      },
-      parameters.declarantToken,
-    )
-  }
-
   /**
    * Endpoint Partageons l'eau cible (a implementer plus tard):
    *
    * But:
-   * - Envoyer le resultat normalise d'un connecteur pour ingestion.
-   * - La payload est celle produite par la pipeline ConnectorOutput.
+   * - Envoyer le resultat normalise d'un connecteur pour ingestion,
+   *   avec les metadonnees de synchronisation (dont last_run_at).
    *
    */
-  async ingest(output: ConnectorOutput): Promise<void> {
+  async ingest(parameters: {
+    output: ConnectorOutput
+    declarantId: string
+    contextId: string
+    declarantToken: string
+    lastRunAt: string
+  }): Promise<void> {
+    const {output, declarantId, contextId, declarantToken, lastRunAt} =
+      parameters
+
     // TODO: remplacer par le POST d'ingestion vers la plateforme.
     const metricCount = output.data.metrics.length
     const valueCount = output.data.metrics.reduce(
       (total, metric) => total + metric.values.length,
       0,
     )
-    console.log(
-      `[PartageonsLeauClient] Ingesting ${metricCount} metrics (${valueCount} values) for service account: ${output.serviceAccount} and source point: ${output.sourcePointId}`,
+    const payload = {
+      ...output,
+      metadata: {
+        declarant_id: declarantId,
+        context_id: contextId,
+        last_run_at: lastRunAt,
+      },
+    }
+
+    if (!this.isApiConfigured()) {
+      console.log(
+        `[PartageonsLeauClient] Ingesting ${metricCount} metrics (${valueCount} values) for service account: ${output.serviceAccount} and source point: ${output.sourcePointId} with last_run_at=${lastRunAt}.`,
+      )
+      return
+    }
+
+    await this.postJson(
+      '/service-accounts/declarants/ingest',
+      payload,
+      declarantToken,
     )
   }
 

@@ -42,6 +42,13 @@ export abstract class BaseConnector<TRawData, TParsedData> {
     }
   }
 
+  protected resolveStartDate(parameters: {
+    mostRecentAvailableDate: Date | undefined
+    connectorEnabledDate: Date
+  }): Date {
+    return parameters.mostRecentAvailableDate ?? parameters.connectorEnabledDate
+  }
+
   protected abstract fetch(context: ConnectorRunContext): Promise<TRawData>
 
   protected abstract parse(

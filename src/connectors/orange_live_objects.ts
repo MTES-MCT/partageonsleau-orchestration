@@ -98,7 +98,10 @@ export class OrangeLiveObjectsConnector extends BaseConnector<
       )
     }
 
-    const startDate = this.getStartDate(context.mostRecentAvailableDate)
+    const startDate = this.resolveStartDate({
+      mostRecentAvailableDate: context.mostRecentAvailableDate,
+      connectorEnabledDate: OrangeLiveObjectsConnector.connectorEnabledDate,
+    })
     const endDate = new Date().toISOString()
     const query = new URLSearchParams({
       limit: '500',
@@ -195,12 +198,5 @@ export class OrangeLiveObjectsConnector extends BaseConnector<
         },
       ]
     })
-  }
-
-  private getStartDate(mostRecentAvailableDate: Date | undefined): Date {
-    // Stratégie de fetch: on récupère toute donnée plus récente que la dernière donnée disponible dans PLE.
-    return (
-      mostRecentAvailableDate ?? OrangeLiveObjectsConnector.connectorEnabledDate
-    )
   }
 }

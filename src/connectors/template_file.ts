@@ -100,6 +100,27 @@ function parseDeclarationNumber(rawValue: string | number): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined
 }
 
+function parseTemplateVolumeRow(
+  row: TemplateFileRowInput,
+): TemplateFileRawRow | undefined {
+  const sourcePointId = String(row[ID_COLUMN]).trim()
+  const dateStart = parseDeclarationDate(row[DATE_START_COLUMN])
+  const dateEnd = parseDeclarationDate(row[DATE_END_COLUMN])
+  const volumeValue = parseDeclarationNumber(row[VOLUME_COLUMN])
+
+  if (!sourcePointId || !dateStart || volumeValue === undefined) {
+    return undefined
+  }
+
+  return {
+    sourcePointId,
+    metricType: MetricType.VOLUME_PRELEVE,
+    dateStart,
+    dateEnd,
+    value: volumeValue,
+  }
+}
+
 async function readRowsFromWorkbook<TInput extends Record<string, unknown>>(
   filePath: string,
   sheetName: string,
@@ -145,35 +166,15 @@ export class TemplateFileConnector extends BaseConnector<
     rawData: TemplateFileFetchResult,
     context: ConnectorRunContext,
   ): Promise<TemplateFileParsedResult> {
-    const startDate =
-      context.mostRecentAvailableDate ??
-      TemplateFileConnector.connectorEnabledDate
-    const records: TemplateFileRawRow[] = []
-
-    for (const row of rawData.rows) {
-      const sourcePointId = String(row[ID_COLUMN]).trim()
-      if (!sourcePointId || sourcePointId !== context.sourcePointId) {
-        continue
-      }
-
-      const dateStart = parseDeclarationDate(row[DATE_START_COLUMN])
-      if (!dateStart || dateStart.getTime() <= startDate.getTime()) {
-        continue
-      }
-
-      const dateEnd = parseDeclarationDate(row[DATE_END_COLUMN])
-
-      const volumeValue = parseDeclarationNumber(row[VOLUME_COLUMN])
-      if (volumeValue !== undefined) {
-        records.push({
-          sourcePointId,
-          metricType: MetricType.VOLUME_PRELEVE,
-          dateStart,
-          dateEnd,
-          value: volumeValue,
-        })
-      }
-    }
+    const startDate = this.resolveStartDate({
+      mostRecentAvailableDate: context.mostRecentAvailableDate,
+      connectorEnabledDate: TemplateFileConnector.connectorEnabledDate,
+    })
+    const records = rawData.rows
+      .map((row) => parseTemplateVolumeRow(row))
+      .filter((row): row is TemplateFileRawRow => row !== undefined)
+      .filter((row) => row.sourcePointId === context.sourcePointId)
+      .filter((row) => row.dateStart.getTime() > startDate.getTime())
 
     return {records}
   }
