@@ -6,6 +6,7 @@ import {
   SourceType,
   type ConnectorRunContext,
   type ParsedPointPayload,
+  type TimeserieValue,
 } from './types.js'
 
 type WillieDatapoint = {
@@ -122,7 +123,12 @@ export class WillieConnector extends BaseConnector<
   private static readonly endpoint =
     'https://api.meetwillie.com/v1/stations/consumption'
 
-  private static readonly granularity = Granularity.HOUR
+  private static readonly metric = {
+    type: MetricType.VOLUME_PRELEVE,
+    granularity: Granularity.HOUR,
+    unit: MetricUnit.M3,
+  } as const
+
   // Idéalement configurable par clé d'API (incompatible avec le modèle actuel)
   private static readonly connectorEnabledDate = new Date('2026-01-01')
 
@@ -145,7 +151,9 @@ export class WillieConnector extends BaseConnector<
         connectorEnabledDate: WillieConnector.connectorEnabledDate,
       }).toISOString(),
       endDate: new Date().toISOString(),
-      resolution: granularityToWillieResolution(WillieConnector.granularity),
+      resolution: granularityToWillieResolution(
+        WillieConnector.metric.granularity,
+      ),
     })
 
     const response = await fetch(`${WillieConnector.endpoint}?${query}`, {
@@ -222,17 +230,19 @@ export class WillieConnector extends BaseConnector<
       source_metadata: {
         provider: 'willie',
         endpoint: WillieConnector.endpoint,
-        resolution: granularityToWillieResolution(WillieConnector.granularity),
+        resolution: granularityToWillieResolution(
+          WillieConnector.metric.granularity,
+        ),
         station_id: station.stationID,
       },
       min_date: minDate,
       max_date: maxDate,
       metrics: [
         {
-          type: MetricType.VOLUME_PRELEVE,
-          granularity: WillieConnector.granularity,
+          type: WillieConnector.metric.type,
+          granularity: WillieConnector.metric.granularity,
           values: this.mapWillieDatapointsToMetricValues(datapoints),
-          unit: MetricUnit.M3,
+          unit: WillieConnector.metric.unit,
         },
       ],
     }
@@ -243,12 +253,9 @@ export class WillieConnector extends BaseConnector<
    */
   private mapWillieDatapointsToMetricValues(
     datapoints: WillieDatapoint[],
-  ): Array<{
-    date: string
-    value: number
-  }> {
+  ): TimeserieValue[] {
     return datapoints.map((datapoint) => ({
-      date: datapoint.dateTime.toISOString(),
+      date: datapoint.dateTime,
       value: datapoint.consumption,
     }))
   }

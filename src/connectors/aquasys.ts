@@ -174,6 +174,11 @@ export class AquasysConnector extends BaseConnector<
   AquasysParsedResult
 > {
   private static readonly connectorEnabledDate = new Date('2026-01-01')
+  private static readonly metric = {
+    granularity: Granularity.DAY,
+    unit: MetricUnit.M3,
+    supportedTypes: [MetricType.INDEX, MetricType.VOLUME_PRELEVE],
+  } as const
 
   constructor() {
     super('aquasys')
@@ -256,12 +261,12 @@ export class AquasysConnector extends BaseConnector<
 
     const metrics = [...byType.entries()].map(([type, values]) => ({
       type,
-      granularity: Granularity.DAY,
+      granularity: AquasysConnector.metric.granularity,
       values: values.map((value) => ({
-        date: value.date.toISOString(),
+        date: value.date,
         value: value.value,
       })),
-      unit: MetricUnit.M3,
+      unit: AquasysConnector.metric.unit,
     }))
 
     return metrics

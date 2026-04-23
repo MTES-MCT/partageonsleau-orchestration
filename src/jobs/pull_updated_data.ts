@@ -48,7 +48,6 @@ async function processPoint(parameters: {
       output,
       declarantId,
       contextId,
-      lastRunAt: output.generatedAt,
       declarantToken,
     })
     console.log(
@@ -107,7 +106,7 @@ export async function pullUpdatedData(
       )
       const contexts = await partageonsLeauClient.getContextsForDeclarant(
         declarant.id,
-        declarantToken,
+        serviceAccountToken,
       )
 
       console.log(

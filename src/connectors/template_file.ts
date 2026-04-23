@@ -144,6 +144,11 @@ export class TemplateFileConnector extends BaseConnector<
   TemplateFileParsedResult
 > {
   private static readonly connectorEnabledDate = new Date('2026-01-01')
+  private static readonly metric = {
+    type: MetricType.VOLUME_PRELEVE,
+    granularity: Granularity.DAY,
+    unit: MetricUnit.M3,
+  } as const
 
   constructor() {
     super('template_file')
@@ -192,12 +197,12 @@ export class TemplateFileConnector extends BaseConnector<
 
     const metrics = [...byType.entries()].map(([type, values]) => ({
       type,
-      granularity: Granularity.DAY,
+      granularity: TemplateFileConnector.metric.granularity,
       values: values.map((value) => ({
-        date: value.date.toISOString(),
+        date: value.date,
         value: value.value,
       })),
-      unit: MetricUnit.M3,
+      unit: TemplateFileConnector.metric.unit,
     }))
 
     const {minDate, maxDate} = this.getMinMaxDates(

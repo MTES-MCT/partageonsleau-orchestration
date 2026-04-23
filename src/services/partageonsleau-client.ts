@@ -1,4 +1,12 @@
-import type {DeclarantContext, ConnectorOutput} from '../connectors/types.js'
+import {
+  Granularity,
+  MetricType,
+  type DeclarantContext,
+  type ConnectorOutput,
+  type ParsedPointPayload,
+  type Timeserie,
+  type TimeserieValue,
+} from '../connectors/types.js'
 import {
   availableServiceAccounts,
   contextsByDeclarant,
@@ -10,14 +18,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
 
-function isMockDeclarant(value: unknown): value is MockDeclarant {
-  return (
-    isRecord(value) &&
-    typeof value.id === 'string' &&
-    typeof value.name === 'string'
-  )
-}
-
 type DeclarantContextPayload = {
   contextId: string
   points: Array<{
@@ -25,6 +25,28 @@ type DeclarantContextPayload = {
     connector: string
     mostRecentAvailableDate: string | undefined
     sourceFile: string
+  }>
+}
+
+type ServiceAccountDeclarantsResponse = {
+  data: Array<{
+    declarantUserId: string
+    declarantName?: string
+  }>
+}
+
+type DeclarantContextApiResponse = {
+  success: boolean
+  exploitations: Array<{
+    point: {
+      id: string
+      name?: string
+    }
+    mostRecentAvailableDate?: string
+    connector?: {
+      type?: string
+      parameters?: Record<string, unknown>
+    }
   }>
 }
 
@@ -51,6 +73,57 @@ function isDeclarantContextPayload(
   })
 }
 
+function isServiceAccountDeclarantsResponse(
+  value: unknown,
+): value is ServiceAccountDeclarantsResponse {
+  if (!isRecord(value) || !Array.isArray(value.data)) {
+    return false
+  }
+
+  return value.data.every((item) => {
+    return (
+      isRecord(item) &&
+      typeof item.declarantUserId === 'string' &&
+      (item.declarantName === undefined ||
+        typeof item.declarantName === 'string')
+    )
+  })
+}
+
+function isDeclarantContextApiResponse(
+  value: unknown,
+): value is DeclarantContextApiResponse {
+  if (
+    !isRecord(value) ||
+    typeof value.success !== 'boolean' ||
+    !Array.isArray(value.exploitations)
+  ) {
+    return false
+  }
+
+  return value.exploitations.every((exploitation) => {
+    if (!isRecord(exploitation) || !isRecord(exploitation.point)) {
+      return false
+    }
+
+    const {connector} = exploitation
+    const hasValidConnector =
+      connector === undefined ||
+      (isRecord(connector) &&
+        (connector.type === undefined || typeof connector.type === 'string') &&
+        (connector.parameters === undefined || isRecord(connector.parameters)))
+
+    return (
+      typeof exploitation.point.id === 'string' &&
+      (exploitation.point.name === undefined ||
+        typeof exploitation.point.name === 'string') &&
+      (exploitation.mostRecentAvailableDate === undefined ||
+        typeof exploitation.mostRecentAvailableDate === 'string') &&
+      hasValidConnector
+    )
+  })
+}
+
 function toOptionalDate(value: string | undefined): Date | undefined {
   if (!value) {
     return undefined
@@ -64,12 +137,202 @@ function toOptionalDate(value: string | undefined): Date | undefined {
   return parsed
 }
 
+function alignDateToGranularity(date: Date, granularity: Granularity): Date {
+  const aligned = new Date(date)
+
+  switch (granularity) {
+    case Granularity.FIFTEEN_MINUTES: {
+      aligned.setUTCSeconds(0, 0)
+      const minutes = aligned.getUTCMinutes()
+      aligned.setUTCMinutes(Math.floor(minutes / 15) * 15)
+      return aligned
+    }
+
+    case Granularity.HOUR: {
+      aligned.setUTCMinutes(0, 0, 0)
+
+      return aligned
+    }
+
+    case Granularity.DAY: {
+      aligned.setUTCHours(0, 0, 0, 0)
+
+      return aligned
+    }
+
+    case Granularity.WEEK: {
+      aligned.setUTCHours(0, 0, 0, 0)
+      const dayOfWeek = aligned.getUTCDay() // 0=Sunday, 1=Monday, ...
+      const diffToMonday = (dayOfWeek + 6) % 7
+      aligned.setUTCDate(aligned.getUTCDate() - diffToMonday)
+
+      return aligned
+    }
+
+    case Granularity.MONTH: {
+      aligned.setUTCDate(1)
+      aligned.setUTCHours(0, 0, 0, 0)
+
+      return aligned
+    }
+
+    case Granularity.YEAR: {
+      aligned.setUTCMonth(0, 1)
+      aligned.setUTCHours(0, 0, 0, 0)
+
+      return aligned
+    }
+  }
+}
+
+type BucketAggregator = (
+  existing: TimeserieValue,
+  candidate: TimeserieValue,
+) => TimeserieValue
+
+const metricBucketAggregators: Record<MetricType, BucketAggregator> = {
+  [MetricType.VOLUME_PRELEVE](existing, candidate) {
+    // Une valeur de volume est additive dans un même bucket temporel.
+    return {
+      date: existing.date,
+      value: existing.value + candidate.value,
+    }
+  },
+  [MetricType.INDEX](_existing, candidate) {
+    // Un index est un état instantané: on conserve la dernière valeur observée du bucket.
+    return candidate
+  },
+}
+
+function mergeValuesInBucket(
+  metricType: MetricType,
+  existing: TimeserieValue | undefined,
+  candidate: TimeserieValue,
+): TimeserieValue {
+  if (!existing) {
+    return candidate
+  }
+
+  return metricBucketAggregators[metricType](existing, candidate)
+}
+
+/**
+ * Aligne les timestamps sur la granularite de la metrique, puis fusionne
+ * les collisions dans un meme bucket via la strategie d'agregation du MetricType.
+ */
+function normalizeTimeserieValues(metric: Timeserie): TimeserieValue[] {
+  const datedValues = metric.values
+    .map((value) => {
+      const parsedDate = new Date(value.date)
+      return {
+        parsedDate,
+        value,
+      }
+    })
+    .filter((entry) => !Number.isNaN(entry.parsedDate.getTime()))
+
+  const sortedValues: typeof datedValues = []
+  for (const entry of datedValues) {
+    const insertIndex = sortedValues.findIndex(
+      (current) => current.parsedDate.getTime() > entry.parsedDate.getTime(),
+    )
+    if (insertIndex === -1) {
+      sortedValues.push(entry)
+    } else {
+      sortedValues.splice(insertIndex, 0, entry)
+    }
+  }
+
+  const valuesByBucket = new Map<number, TimeserieValue>()
+  for (const entry of sortedValues) {
+    const alignedDate = alignDateToGranularity(
+      entry.parsedDate,
+      metric.granularity,
+    )
+    const bucketKey = alignedDate.getTime()
+    const candidate: TimeserieValue = {
+      date: alignedDate,
+      value: entry.value.value,
+    }
+    const merged = mergeValuesInBucket(
+      metric.type,
+      valuesByBucket.get(bucketKey),
+      candidate,
+    )
+    valuesByBucket.set(bucketKey, merged)
+  }
+
+  const sortedEntries: Array<[number, TimeserieValue]> = []
+  for (const entry of valuesByBucket.entries()) {
+    const insertIndex = sortedEntries.findIndex(([key]) => key > entry[0])
+    if (insertIndex === -1) {
+      sortedEntries.push(entry)
+    } else {
+      sortedEntries.splice(insertIndex, 0, entry)
+    }
+  }
+
+  return sortedEntries.map(([, value]) => value)
+}
+
+function normalizePayloadData(data: ParsedPointPayload): ParsedPointPayload {
+  const normalizedMetrics = data.metrics.map((metric) => ({
+    ...metric,
+    values: normalizeTimeserieValues(metric),
+  }))
+
+  const allMetricDates = normalizedMetrics.flatMap((metric) =>
+    metric.values.map((value) => value.date),
+  )
+
+  return {
+    ...data,
+    metrics: normalizedMetrics,
+    min_date: allMetricDates.length > 0 ? allMetricDates[0] : data.min_date,
+    max_date: allMetricDates.length > 0 ? allMetricDates.at(-1) : data.max_date,
+  }
+}
+
+function serializePayloadDataForPost(
+  data: ParsedPointPayload,
+): Record<string, unknown> {
+  return {
+    ...data,
+    min_date: data.min_date?.toISOString(),
+    max_date: data.max_date?.toISOString(),
+    metrics: data.metrics.map((metric) => ({
+      ...metric,
+      values: metric.values.map((value) => ({
+        ...value,
+        date: value.date.toISOString(),
+      })),
+    })),
+  }
+}
+
+function serializeOutputForPost(
+  output: ConnectorOutput,
+  normalizedData: ParsedPointPayload,
+): Record<string, unknown> {
+  return {
+    ...output,
+    lastRunAt: output.lastRunAt.toISOString(),
+    data: serializePayloadDataForPost(normalizedData),
+  }
+}
+
 export class PartageonsLeauClient {
   private readonly baseUrl = process.env.PLE_BASE_URL
   private readonly clientId = process.env.CLIENT_ID
   private readonly clientSecret = process.env.CLIENT_SECRET
 
   async getAvailableServiceAccounts(): Promise<string[]> {
+    if (this.isApiConfigured() && this.clientId) {
+      // En mode API réelle, on exécute l'orchestration sur le SA porté
+      // par le couple clientId/clientSecret local.
+      return [this.clientId]
+    }
+
     return availableServiceAccounts
   }
 
@@ -89,10 +352,14 @@ export class PartageonsLeauClient {
       )
     }
 
-    const accessToken = response.access_token
-    const fallbackToken = response.token
+    const {
+      accessToken,
+      access_token: legacyAccessToken,
+      token: fallbackToken,
+    } = response
     const token =
       (typeof accessToken === 'string' && accessToken) ||
+      (typeof legacyAccessToken === 'string' && legacyAccessToken) ||
       (typeof fallbackToken === 'string' && fallbackToken)
     if (!token) {
       throw new Error(
@@ -116,13 +383,14 @@ export class PartageonsLeauClient {
       serviceAccountToken,
     )
 
-    if (!isRecord(response) || !Array.isArray(response.data)) {
+    if (!isServiceAccountDeclarantsResponse(response)) {
       return []
     }
 
-    return response.data.filter((item): item is MockDeclarant =>
-      isMockDeclarant(item),
-    )
+    return response.data.map((item) => ({
+      id: item.declarantUserId,
+      name: item.declarantName ?? item.declarantUserId,
+    }))
   }
 
   async getDeclarantToken(
@@ -145,10 +413,14 @@ export class PartageonsLeauClient {
       )
     }
 
-    const accessToken = response.access_token
-    const fallbackToken = response.token
+    const {
+      accessToken,
+      access_token: legacyAccessToken,
+      token: fallbackToken,
+    } = response
     const token =
       (typeof accessToken === 'string' && accessToken) ||
+      (typeof legacyAccessToken === 'string' && legacyAccessToken) ||
       (typeof fallbackToken === 'string' && fallbackToken)
     if (!token) {
       throw new Error(
@@ -171,25 +443,52 @@ export class PartageonsLeauClient {
       `/service-accounts/declarants/${encodeURIComponent(declarantId)}/context`,
       declarantToken,
     )
-    if (!isRecord(response) || !Array.isArray(response.data)) {
+    // Ancien format conservé pour compatibilité montante.
+    if (isRecord(response) && Array.isArray(response.data)) {
+      return response.data
+        .filter((item): item is DeclarantContextPayload =>
+          isDeclarantContextPayload(item),
+        )
+        .map((context) => ({
+          contextId: context.contextId,
+          points: context.points.map((point) => ({
+            sourcePointId: point.sourcePointId,
+            connector: point.connector,
+            mostRecentAvailableDate: toOptionalDate(
+              point.mostRecentAvailableDate,
+            ),
+            sourceFile: point.sourceFile,
+          })),
+        }))
+    }
+
+    if (!isDeclarantContextApiResponse(response)) {
       return []
     }
 
-    return response.data
-      .filter((item): item is DeclarantContextPayload =>
-        isDeclarantContextPayload(item),
-      )
-      .map((context) => ({
-        contextId: context.contextId,
-        points: context.points.map((point) => ({
-          sourcePointId: point.sourcePointId,
-          connector: point.connector,
-          mostRecentAvailableDate: toOptionalDate(
-            point.mostRecentAvailableDate,
-          ),
-          sourceFile: point.sourceFile,
-        })),
-      }))
+    return [
+      {
+        contextId: `declarant:${declarantId}`,
+        points: response.exploitations
+          .filter(
+            (exploitation) =>
+              typeof exploitation.connector?.type === 'string' &&
+              exploitation.connector.type.length > 0,
+          )
+          .map((exploitation) => {
+            const sourceFile = exploitation.connector?.parameters?.sourceFile
+            return {
+              sourcePointId: exploitation.point.id,
+              connector: exploitation.connector?.type ?? '',
+              mostRecentAvailableDate: toOptionalDate(
+                exploitation.mostRecentAvailableDate,
+              ),
+              sourceFile:
+                typeof sourceFile === 'string' ? sourceFile : undefined,
+            }
+          }),
+      },
+    ]
   }
 
   /**
@@ -205,29 +504,31 @@ export class PartageonsLeauClient {
     declarantId: string
     contextId: string
     declarantToken: string
-    lastRunAt: string
   }): Promise<void> {
-    const {output, declarantId, contextId, declarantToken, lastRunAt} =
-      parameters
+    const {output, declarantId, contextId, declarantToken} = parameters
+
+    const normalizedData = normalizePayloadData(output.data)
 
     // TODO: remplacer par le POST d'ingestion vers la plateforme.
-    const metricCount = output.data.metrics.length
-    const valueCount = output.data.metrics.reduce(
+    const metricCount = normalizedData.metrics.length
+    const valueCount = normalizedData.metrics.reduce(
       (total, metric) => total + metric.values.length,
       0,
     )
+    const serializedOutput = serializeOutputForPost(output, normalizedData)
+    console.log(JSON.stringify(serializedOutput, null, 2))
     const payload = {
-      ...output,
+      ...serializedOutput,
       metadata: {
         declarant_id: declarantId,
         context_id: contextId,
-        last_run_at: lastRunAt,
+        last_run_at: output.lastRunAt.toISOString(),
       },
     }
 
     if (!this.isApiConfigured()) {
       console.log(
-        `[PartageonsLeauClient] Ingesting ${metricCount} metrics (${valueCount} values) for service account: ${output.serviceAccount} and source point: ${output.sourcePointId} with last_run_at=${lastRunAt}.`,
+        `[PartageonsLeauClient] Ingesting ${metricCount} metrics (${valueCount} values) for service account: ${output.serviceAccount} and source point: ${output.sourcePointId} with last_run_at=${output.lastRunAt.toISOString()}.`,
       )
       return
     }
