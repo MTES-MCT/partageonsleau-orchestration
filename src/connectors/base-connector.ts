@@ -19,7 +19,7 @@ export abstract class BaseConnector<TRawData, TParsedData> {
       connector: this.name,
       serviceAccount: context.serviceAccount,
       sourcePointId: context.sourcePointId,
-      generatedAt: new Date().toISOString(),
+      lastRunAt: new Date(),
       data: parsedData,
     }
   }
@@ -27,7 +27,7 @@ export abstract class BaseConnector<TRawData, TParsedData> {
   protected getMinMaxDates<T>(
     items: T[],
     getDate: (item: T) => Date,
-  ): {minDate: string | undefined; maxDate: string | undefined} {
+  ): {minDate: Date | undefined; maxDate: Date | undefined} {
     if (items.length === 0) {
       return {
         minDate: undefined,
@@ -37,8 +37,8 @@ export abstract class BaseConnector<TRawData, TParsedData> {
 
     const dates = items.map((item) => getDate(item).getTime())
     return {
-      minDate: new Date(Math.min(...dates)).toISOString(),
-      maxDate: new Date(Math.max(...dates)).toISOString(),
+      minDate: new Date(Math.min(...dates)),
+      maxDate: new Date(Math.max(...dates)),
     }
   }
 

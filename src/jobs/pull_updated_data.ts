@@ -22,6 +22,7 @@ async function processPoint(parameters: {
   } = parameters
 
   const {
+    pointId,
     connector: connectorName,
     sourcePointId,
     mostRecentAvailableDate,
@@ -46,9 +47,9 @@ async function processPoint(parameters: {
 
     await partageonsLeauClient.ingest({
       output,
+      pointId,
       declarantId,
       contextId,
-      lastRunAt: output.generatedAt,
       declarantToken,
     })
     console.log(
@@ -107,7 +108,7 @@ export async function pullUpdatedData(
       )
       const contexts = await partageonsLeauClient.getContextsForDeclarant(
         declarant.id,
-        declarantToken,
+        serviceAccountToken,
       )
 
       console.log(

@@ -85,6 +85,11 @@ export class OrangeLiveObjectsConnector extends BaseConnector<
     'https://liveobjects.orange-business.com/api/v0/data/streams'
 
   private static readonly connectorEnabledDate = new Date('2026-01-01')
+  private static readonly metric = {
+    type: MetricType.INDEX,
+    granularity: Granularity.FIFTEEN_MINUTES,
+    unit: MetricUnit.M3,
+  } as const
 
   constructor() {
     super('orange_live_objects')
@@ -151,7 +156,7 @@ export class OrangeLiveObjectsConnector extends BaseConnector<
       (value) => value.date,
     )
     const serializedValues = parsedData.values.map((value) => ({
-      date: value.date.toISOString(),
+      date: value.date,
       value: value.value,
     }))
 
@@ -168,10 +173,10 @@ export class OrangeLiveObjectsConnector extends BaseConnector<
       max_date: maxDate,
       metrics: [
         {
-          type: MetricType.VOLUME_PRELEVE,
-          granularity: Granularity.DAY,
+          type: OrangeLiveObjectsConnector.metric.type,
+          granularity: OrangeLiveObjectsConnector.metric.granularity,
           values: serializedValues,
-          unit: MetricUnit.M3,
+          unit: OrangeLiveObjectsConnector.metric.unit,
         },
       ],
     }
