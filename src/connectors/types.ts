@@ -3,6 +3,7 @@ export type ConfigEntry = {
 }
 
 export type ServiceAccountPointContext = {
+  pointId: string
   sourcePointId: string
   connector: string
   mostRecentAvailableDate: Date | undefined

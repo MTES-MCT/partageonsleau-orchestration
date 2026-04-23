@@ -21,6 +21,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 type DeclarantContextPayload = {
   contextId: string
   points: Array<{
+    pointId: string
     sourcePointId: string
     connector: string
     mostRecentAvailableDate: string | undefined
@@ -64,6 +65,7 @@ function isDeclarantContextPayload(
   return value.points.every((point) => {
     return (
       isRecord(point) &&
+      (point.pointId === undefined || typeof point.pointId === 'string') &&
       typeof point.sourcePointId === 'string' &&
       typeof point.connector === 'string' &&
       (point.mostRecentAvailableDate === undefined ||
@@ -452,6 +454,7 @@ export class PartageonsLeauClient {
         .map((context) => ({
           contextId: context.contextId,
           points: context.points.map((point) => ({
+            pointId: point.pointId,
             sourcePointId: point.sourcePointId,
             connector: point.connector,
             mostRecentAvailableDate: toOptionalDate(
@@ -477,8 +480,14 @@ export class PartageonsLeauClient {
           )
           .map((exploitation) => {
             const sourceFile = exploitation.connector?.parameters?.sourceFile
+            const sourcePointId =
+              exploitation.connector?.parameters?.sourcePointId
             return {
-              sourcePointId: exploitation.point.id,
+              pointId: exploitation.point.id,
+              sourcePointId:
+                typeof sourcePointId === 'string'
+                  ? sourcePointId
+                  : exploitation.point.id,
               connector: exploitation.connector?.type ?? '',
               mostRecentAvailableDate: toOptionalDate(
                 exploitation.mostRecentAvailableDate,
@@ -501,11 +510,12 @@ export class PartageonsLeauClient {
    */
   async ingest(parameters: {
     output: ConnectorOutput
+    pointId: string
     declarantId: string
     contextId: string
     declarantToken: string
   }): Promise<void> {
-    const {output, declarantId, contextId, declarantToken} = parameters
+    const {output, pointId, declarantId, contextId, declarantToken} = parameters
 
     const normalizedData = normalizePayloadData(output.data)
 
@@ -516,10 +526,10 @@ export class PartageonsLeauClient {
       0,
     )
     const serializedOutput = serializeOutputForPost(output, normalizedData)
-    console.log(JSON.stringify(serializedOutput, null, 2))
     const payload = {
       ...serializedOutput,
       metadata: {
+        point_id: pointId,
         declarant_id: declarantId,
         context_id: contextId,
         last_run_at: output.lastRunAt.toISOString(),
