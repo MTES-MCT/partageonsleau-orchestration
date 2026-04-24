@@ -19,12 +19,18 @@
     "node": "24.15.0"
   },
   "devDependencies": {
+    "@types/express": "^5.0.6",
     "@types/node": "^24.12.2",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3",
     "xo": "^2.0.2"
   },
   "dependencies": {
+    "@sentry/node": "^10.50.0",
+    "@sentry/profiling-node": "^10.50.0",
+    "bullmq": "^5.76.1",
+    "express": "^5.2.1",
+    "ioredis": "^5.10.1",
     "xlsx": "^0.18.5"
   }
 }
