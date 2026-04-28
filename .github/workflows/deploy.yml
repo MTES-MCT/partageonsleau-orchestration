@@ -1,21 +1,22 @@
-name: Deploy image to Scaleway
+name: Deploy
 
 on:
   push:
-    branches: ["main"]
+    branches:
+      - testing
+      - prod
 
 permissions:
   contents: read
 
 jobs:
-  test_build_deploy:
+  deploy:
     runs-on: ubuntu-latest
-    environment: prod
 
     env:
-      TZ: Europe/Paris
       SCW_REGISTRY_ENDPOINT: ${{ vars.SCW_REGISTRY_ENDPOINT }}
       SCW_IMAGE_NAME: ${{ vars.SCW_IMAGE_NAME }}
+      SCW_DEFAULT_REGION: ${{ vars.SCW_DEFAULT_REGION }}
 
     steps:
       - name: Checkout
@@ -25,7 +26,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "24.x"
-          cache: "npm"
+          cache: npm
 
       - name: Install deps
         run: npm ci
@@ -36,10 +37,23 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      - name: Test (if present)
+      - name: Test
         run: npm test --if-present
         env:
           NODE_ENV: test
+
+      - name: Select deployment target
+        run: |
+          if [ "$GITHUB_REF_NAME" = "testing" ]; then
+            echo "SCW_CONTAINER_ID=${{ vars.SCW_TESTING_CONTAINER_ID }}" >> "$GITHUB_ENV"
+            echo "IMAGE_TAG=testing" >> "$GITHUB_ENV"
+          elif [ "$GITHUB_REF_NAME" = "prod" ]; then
+            echo "SCW_CONTAINER_ID=${{ vars.SCW_PROD_CONTAINER_ID }}" >> "$GITHUB_ENV"
+            echo "IMAGE_TAG=prod" >> "$GITHUB_ENV"
+          else
+            echo "Unsupported branch: $GITHUB_REF_NAME"
+            exit 1
+          fi
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -51,7 +65,7 @@ jobs:
           username: nologin
           password: ${{ secrets.SCW_SECRET_KEY }}
 
-      - name: Build & push image
+      - name: Build and push image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -59,7 +73,23 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: |
-            ${{ env.SCW_REGISTRY_ENDPOINT }}/${{ env.SCW_IMAGE_NAME }}:latest
+            ${{ env.SCW_REGISTRY_ENDPOINT }}/${{ env.SCW_IMAGE_NAME }}:${{ env.IMAGE_TAG }}
             ${{ env.SCW_REGISTRY_ENDPOINT }}/${{ env.SCW_IMAGE_NAME }}:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Install Scaleway CLI
+        uses: scaleway/action-scw@v0
+        with:
+          save-config: true
+          export-config: true
+          access-key: ${{ secrets.SCW_ACCESS_KEY }}
+          secret-key: ${{ secrets.SCW_SECRET_KEY }}
+          default-project-id: ${{ secrets.SCW_DEFAULT_PROJECT_ID }}
+          default-organization-id: ${{ secrets.SCW_DEFAULT_ORGANIZATION_ID }}
+
+      - name: Update container image and redeploy
+        run: |
+          scw container container update "$SCW_CONTAINER_ID" \
+            registry-image="${SCW_REGISTRY_ENDPOINT}/${SCW_IMAGE_NAME}:${IMAGE_TAG}" \
+            region="$SCW_DEFAULT_REGION"
