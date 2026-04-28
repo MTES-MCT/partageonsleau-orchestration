@@ -10,7 +10,7 @@ COPY index.ts ./
 COPY src ./src
 
 RUN npm run build
-
+RUN npm prune --omit=dev
 
 FROM node:24.15.0-bookworm-slim
 
@@ -20,14 +20,14 @@ ENV NODE_ENV=production
 ENV NODE_OPTIONS=--use-openssl-ca
 ENV PORT=3000
 
-COPY package*.json ./
-RUN npm ci --omit=dev
-
-COPY --from=builder /app/dist ./dist
-
 RUN apt-get update \
   && apt-get install -y --no-install-recommends dumb-init ca-certificates \
   && rm -rf /var/lib/apt/lists/*
+
+
+COPY package*.json ./
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/dist ./dist
 
 ARG ENV_NAME=testing
 
