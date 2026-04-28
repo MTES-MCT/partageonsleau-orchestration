@@ -6,7 +6,7 @@ import * as Sentry from '@sentry/node'
 
 const isTest = process.env.NODE_ENV === 'test'
 
-let redisConnection: Redis | null | undefined = null
+let redisConnection: Redis | undefined
 
 export function getRedisConnection(): Redis {
   if (redisConnection) {
@@ -91,7 +91,7 @@ export async function closeRedisConnection() {
   }
 
   const client = redisConnection
-  redisConnection = null
+  redisConnection = undefined
 
   try {
     if (client.status === 'end') {
