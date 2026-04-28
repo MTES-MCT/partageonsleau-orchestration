@@ -45,10 +45,10 @@ jobs:
       - name: Select deployment target
         run: |
           if [ "$GITHUB_REF_NAME" = "testing" ]; then
-            echo "SCW_CONTAINER_ID=${{ vars.SCW_TESTING_CONTAINER_ID }}" >> "$GITHUB_ENV"
+            echo "SCW_CONTAINER_ID=${{ secrets.SCW_TESTING_CONTAINER_ID }}" >> "$GITHUB_ENV"
             echo "IMAGE_TAG=testing" >> "$GITHUB_ENV"
           elif [ "$GITHUB_REF_NAME" = "prod" ]; then
-            echo "SCW_CONTAINER_ID=${{ vars.SCW_PROD_CONTAINER_ID }}" >> "$GITHUB_ENV"
+            echo "SCW_CONTAINER_ID=${{ secrets.SCW_PROD_CONTAINER_ID }}" >> "$GITHUB_ENV"
             echo "IMAGE_TAG=prod" >> "$GITHUB_ENV"
           else
             echo "Unsupported branch: $GITHUB_REF_NAME"
