@@ -2,7 +2,7 @@ import {JOBS, getQueue} from './config.js'
 
 export async function startScheduler() {
   for (const job of JOBS) {
-    if (!job.cron) {
+    if (!('cron' in job) || !job.cron) {
       continue
     }
 

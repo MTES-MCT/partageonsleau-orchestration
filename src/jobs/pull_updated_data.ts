@@ -6,18 +6,18 @@ async function processPoint(parameters: {
   connectorRegistry: Map<string, BaseConnector<unknown, unknown>>
   partageonsLeauClient: PartageonsLeauClient
   serviceAccount: string
+  serviceAccountToken: string
   declarantId: string
   contextId: string
-  declarantToken: string
   point: ServiceAccountPointContext
 }): Promise<void> {
   const {
     connectorRegistry,
     partageonsLeauClient,
     serviceAccount,
+    serviceAccountToken,
     declarantId,
     contextId,
-    declarantToken,
     point,
   } = parameters
 
@@ -28,6 +28,7 @@ async function processPoint(parameters: {
     mostRecentAvailableDate,
     sourceFile,
   } = point
+
   const connector = connectorRegistry.get(connectorName)
 
   if (!connector) {
@@ -50,8 +51,9 @@ async function processPoint(parameters: {
       pointId,
       declarantId,
       contextId,
-      declarantToken,
+      serviceAccountToken,
     })
+
     console.log(
       `[PullUpdatedData] Données ingérées pour le point source : ${sourcePointId}`,
     )
@@ -63,9 +65,6 @@ async function processPoint(parameters: {
   }
 }
 
-/**
- * Effectue une synchronisation des données pour chaque compte service via les connecteurs disponibles.
- */
 export async function pullUpdatedData(
   connectorRegistry: Map<string, BaseConnector<unknown, unknown>>,
 ) {
@@ -75,19 +74,21 @@ export async function pullUpdatedData(
 
   const partageonsLeauClient = new PartageonsLeauClient()
 
-  // Récupère la liste des comptes service disponibles
   console.log('[PullUpdatedData] Recherche des comptes service disponibles...')
 
   const availableServiceAccounts =
     await partageonsLeauClient.getAvailableServiceAccounts()
+
   console.log(
     `[PullUpdatedData] Nombre de comptes service trouvés : ${availableServiceAccounts.length}`,
   )
 
   for (const serviceAccount of availableServiceAccounts) {
     console.log(`[PullUpdatedData] Auth service account : ${serviceAccount}`)
+
     const serviceAccountToken =
       await partageonsLeauClient.getServiceAccountToken(serviceAccount)
+
     const declarants =
       await partageonsLeauClient.getDeclarantsForServiceAccount(
         serviceAccount,
@@ -102,10 +103,7 @@ export async function pullUpdatedData(
       console.log(
         `[PullUpdatedData] Traitement déclarant ${declarant.id} (${declarant.name})`,
       )
-      const declarantToken = await partageonsLeauClient.getDeclarantToken(
-        declarant.id,
-        serviceAccountToken,
-      )
+
       const contexts = await partageonsLeauClient.getContextsForDeclarant(
         declarant.id,
         serviceAccountToken,
@@ -125,9 +123,9 @@ export async function pullUpdatedData(
             connectorRegistry,
             partageonsLeauClient,
             serviceAccount,
+            serviceAccountToken,
             declarantId: declarant.id,
             contextId: context.contextId,
-            declarantToken,
             point,
           })
         }

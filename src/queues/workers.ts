@@ -2,12 +2,32 @@ import {Worker, type Job} from 'bullmq'
 import * as Sentry from '@sentry/node'
 import {connectorRegistry} from '../connectors/index.js'
 import {pullUpdatedData} from '../jobs/pull_updated_data.js'
+import {processDeclaration} from '../jobs/process-declaration.js'
 import {getConnection, JOBS} from './config.js'
 
-const handlers: Record<string, (job: Job) => Promise<void>> = {
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+const handlers: Record<string, (job: Job<unknown>) => Promise<void>> = {
   // eslint-disable-next-line @typescript-eslint/naming-convention
   async 'pull-updated-data'(_job) {
     await pullUpdatedData(connectorRegistry)
+  },
+
+  // eslint-disable-next-line @typescript-eslint/naming-convention
+  async 'process-declaration'(job) {
+    if (!isObjectRecord(job.data)) {
+      throw new Error('[process-declaration] Missing declarationId')
+    }
+
+    const {declarationId} = job.data
+
+    if (typeof declarationId !== 'string' || !declarationId) {
+      throw new Error('[process-declaration] Missing declarationId')
+    }
+
+    await processDeclaration(declarationId)
   },
 }
 

@@ -97,6 +97,7 @@ export class OrangeLiveObjectsConnector extends BaseConnector<
 
   protected async fetch(context: ConnectorRunContext): Promise<unknown> {
     const apiKey = process.env.ORANGE_LIVE_OBJECTS_API_KEY
+
     if (!apiKey) {
       throw new Error(
         `[${this.name}] Missing ORANGE_LIVE_OBJECTS_API_KEY environment variable.`,
@@ -107,13 +108,20 @@ export class OrangeLiveObjectsConnector extends BaseConnector<
       mostRecentAvailableDate: context.mostRecentAvailableDate,
       connectorEnabledDate: OrangeLiveObjectsConnector.connectorEnabledDate,
     })
+
     const endDate = new Date().toISOString()
+
     const query = new URLSearchParams({
       limit: '500',
       timeRange: `${startDate.toISOString()},${endDate}`,
     })
+
     const streamId = encodeURIComponent(context.sourcePointId)
     const url = `${OrangeLiveObjectsConnector.endpoint}/${streamId}?${query}`
+
+    console.log(
+      `[${this.name}] Fetch stream="${context.sourcePointId}", startDate=${startDate.toISOString()}, endDate=${endDate}`,
+    )
 
     const response = await fetch(url, {
       headers: {
@@ -129,7 +137,13 @@ export class OrangeLiveObjectsConnector extends BaseConnector<
       )
     }
 
-    return response.json()
+    const payload: unknown = await response.json()
+
+    console.log(
+      `[${this.name}] Orange response received for stream="${context.sourcePointId}"`,
+    )
+
+    return payload
   }
 
   protected async parse(
@@ -142,9 +156,13 @@ export class OrangeLiveObjectsConnector extends BaseConnector<
       )
     }
 
-    return {
-      values: this.mapOrangeRecordsToMetricValues(rawData),
-    }
+    const values = this.mapOrangeRecordsToMetricValues(rawData)
+
+    console.log(
+      `[${this.name}] Parsed records=${rawData.length}, values=${values.length}, stream="${context.sourcePointId}"`,
+    )
+
+    return {values}
   }
 
   protected async process(
@@ -155,10 +173,6 @@ export class OrangeLiveObjectsConnector extends BaseConnector<
       parsedData.values,
       (value) => value.date,
     )
-    const serializedValues = parsedData.values.map((value) => ({
-      date: value.date,
-      value: value.value,
-    }))
 
     return {
       id_point_de_prelevement: context.sourcePointId,
@@ -175,7 +189,7 @@ export class OrangeLiveObjectsConnector extends BaseConnector<
         {
           type: OrangeLiveObjectsConnector.metric.type,
           granularity: OrangeLiveObjectsConnector.metric.granularity,
-          values: serializedValues,
+          values: parsedData.values,
           unit: OrangeLiveObjectsConnector.metric.unit,
         },
       ],
@@ -187,11 +201,13 @@ export class OrangeLiveObjectsConnector extends BaseConnector<
   ): OrangeMetricValue[] {
     return records.flatMap((record) => {
       const sensorValue = record.value.genericSensor?.['1']?.sensorValue
+
       if (typeof sensorValue !== 'number') {
         return []
       }
 
       const date = new Date(record.timestamp)
+
       if (Number.isNaN(date.getTime())) {
         return []
       }
