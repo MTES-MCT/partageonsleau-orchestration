@@ -1,14 +1,67 @@
+import crypto from 'node:crypto'
 import process from 'node:process'
 import express, {type NextFunction, type Request, type Response} from 'express'
 import {Sentry} from './instrument.js'
-import {closeQueues} from './queues/config.js'
-import {addJobPullUpdatedData} from './queues/jobs.js'
+import {addJobProcessDeclaration, addJobPullUpdatedData} from './queues/jobs.js'
 import {closeRedisConnection, waitForRedisConnection} from './queues/redis.js'
 import {startScheduler} from './queues/scheduler.js'
 import {startWorkers} from './queues/workers.js'
+import {closeQueues} from './queues/config.js'
+
+type RequestWithRawBody = Request & {
+  rawBody?: string
+}
 
 const app = express()
-app.use(express.json())
+
+app.use(
+  express.json({
+    verify(request, _response, buffer) {
+      ;(request as RequestWithRawBody).rawBody = buffer.toString('utf8')
+    },
+  }),
+)
+
+function verifyPleSignature(request: Request): void {
+  const secret = process.env.PLE_WEBHOOK_SECRET
+
+  if (!secret) {
+    throw new Error('PLE_WEBHOOK_SECRET is not configured')
+  }
+
+  const signature = request.get('X-PLE-Signature')
+
+  if (!signature) {
+    throw new Error('Missing X-PLE-Signature header')
+  }
+
+  const {rawBody} = request as RequestWithRawBody
+
+  if (!rawBody) {
+    throw new Error('Missing raw request body')
+  }
+
+  const expectedSignature = crypto
+    .createHmac('sha256', secret)
+    .update(rawBody)
+    .digest('hex')
+
+  const signatureBuffer = Buffer.from(signature, 'hex')
+  const expectedSignatureBuffer = Buffer.from(expectedSignature, 'hex')
+
+  if (signatureBuffer.length !== expectedSignatureBuffer.length) {
+    throw new Error('Invalid webhook signature')
+  }
+
+  const isValid = crypto.timingSafeEqual(
+    signatureBuffer,
+    expectedSignatureBuffer,
+  )
+
+  if (!isValid) {
+    throw new Error('Invalid webhook signature')
+  }
+}
 
 app.get('/health', (_request, response) => {
   response.status(200).json({ok: true})
@@ -21,6 +74,42 @@ app.get('/debug-sentry', () => {
 app.post('/jobs/pull-updated-data', async (_request, response, next) => {
   try {
     const job = await addJobPullUpdatedData({trigger: 'http'})
+
+    response.status(202).json({
+      ok: true,
+      jobId: job?.id ?? null,
+    })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.post('/hooks/declarations', async (request, response, next) => {
+  try {
+    verifyPleSignature(request)
+
+    const {event, declarationId} = request.body as {
+      event?: string
+      declarationId?: string
+    }
+
+    if (event !== 'declaration.uploaded') {
+      response.status(400).json({
+        ok: false,
+        error: 'Invalid event',
+      })
+      return
+    }
+
+    if (!declarationId) {
+      response.status(400).json({
+        ok: false,
+        error: 'Missing declarationId',
+      })
+      return
+    }
+
+    const job = await addJobProcessDeclaration({declarationId})
 
     response.status(202).json({
       ok: true,

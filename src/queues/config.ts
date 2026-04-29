@@ -6,6 +6,9 @@ export const JOBS = [
     name: 'pull-updated-data',
     cron: '0 0 3 * * *',
   },
+  {
+    name: 'process-declaration',
+  },
 ] as const
 
 export type JobName = (typeof JOBS)[number]['name']

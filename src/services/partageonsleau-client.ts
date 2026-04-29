@@ -43,11 +43,13 @@ type DeclarantContextApiResponse = {
       id: string
       name?: string
     }
-    mostRecentAvailableDate?: string
-    connector?: {
-      type?: string
-      parameters?: Record<string, unknown>
-    }
+    mostRecentAvailableDate?: string | undefined
+    connector?:
+      | {
+          type?: string | undefined
+          parameters?: Record<string, unknown> | undefined
+        }
+      | undefined
   }>
 }
 
@@ -109,17 +111,24 @@ function isDeclarantContextApiResponse(
     }
 
     const {connector} = exploitation
+
     const hasValidConnector =
       connector === undefined ||
+      connector === null ||
       (isRecord(connector) &&
-        (connector.type === undefined || typeof connector.type === 'string') &&
-        (connector.parameters === undefined || isRecord(connector.parameters)))
+        (connector.type === undefined ||
+          connector.type === null ||
+          typeof connector.type === 'string') &&
+        (connector.parameters === undefined ||
+          connector.parameters === null ||
+          isRecord(connector.parameters)))
 
     return (
       typeof exploitation.point.id === 'string' &&
       (exploitation.point.name === undefined ||
         typeof exploitation.point.name === 'string') &&
       (exploitation.mostRecentAvailableDate === undefined ||
+        exploitation.mostRecentAvailableDate === null ||
         typeof exploitation.mostRecentAvailableDate === 'string') &&
       hasValidConnector
     )
@@ -466,36 +475,47 @@ export class PartageonsLeauClient {
     }
 
     if (!isDeclarantContextApiResponse(response)) {
+      console.warn(
+        `[PartageonsLeauClient] Invalid context response for declarant ${declarantId}:`,
+        JSON.stringify(response, null, 2),
+      )
+
       return []
     }
+
+    const points = response.exploitations
+      .filter((exploitation) => {
+        const connectorType = exploitation.connector?.type
+
+        return typeof connectorType === 'string' && connectorType.length > 0
+      })
+      .map((exploitation) => {
+        const connectorParameters = exploitation.connector?.parameters ?? {}
+        const {sourceFile} = connectorParameters
+        const {sourcePointId} = connectorParameters
+
+        return {
+          pointId: exploitation.point.id,
+          sourcePointId:
+            typeof sourcePointId === 'string'
+              ? sourcePointId
+              : exploitation.point.id,
+          connector: exploitation.connector?.type ?? '',
+          mostRecentAvailableDate: toOptionalDate(
+            exploitation.mostRecentAvailableDate ?? undefined,
+          ),
+          sourceFile: typeof sourceFile === 'string' ? sourceFile : undefined,
+        }
+      })
+
+    console.log(
+      `[PartageonsLeauClient] Declarant ${declarantId}: exploitations=${response.exploitations.length}, connector points=${points.length}`,
+    )
 
     return [
       {
         contextId: `declarant:${declarantId}`,
-        points: response.exploitations
-          .filter(
-            (exploitation) =>
-              typeof exploitation.connector?.type === 'string' &&
-              exploitation.connector.type.length > 0,
-          )
-          .map((exploitation) => {
-            const sourceFile = exploitation.connector?.parameters?.sourceFile
-            const sourcePointId =
-              exploitation.connector?.parameters?.sourcePointId
-            return {
-              pointId: exploitation.point.id,
-              sourcePointId:
-                typeof sourcePointId === 'string'
-                  ? sourcePointId
-                  : exploitation.point.id,
-              connector: exploitation.connector?.type ?? '',
-              mostRecentAvailableDate: toOptionalDate(
-                exploitation.mostRecentAvailableDate,
-              ),
-              sourceFile:
-                typeof sourceFile === 'string' ? sourceFile : undefined,
-            }
-          }),
+        points,
       },
     ]
   }
@@ -513,19 +533,21 @@ export class PartageonsLeauClient {
     pointId: string
     declarantId: string
     contextId: string
-    declarantToken: string
+    serviceAccountToken: string
   }): Promise<void> {
-    const {output, pointId, declarantId, contextId, declarantToken} = parameters
+    const {output, pointId, declarantId, contextId, serviceAccountToken} =
+      parameters
 
     const normalizedData = normalizePayloadData(output.data)
 
-    // TODO: remplacer par le POST d'ingestion vers la plateforme.
     const metricCount = normalizedData.metrics.length
     const valueCount = normalizedData.metrics.reduce(
       (total, metric) => total + metric.values.length,
       0,
     )
+
     const serializedOutput = serializeOutputForPost(output, normalizedData)
+
     const payload = {
       ...serializedOutput,
       metadata: {
@@ -544,9 +566,9 @@ export class PartageonsLeauClient {
     }
 
     await this.postJson(
-      '/service-accounts/declarants/ingest',
+      '/service-accounts/connectors/ingest',
       payload,
-      declarantToken,
+      serviceAccountToken,
     )
   }
 
