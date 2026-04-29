@@ -1,5 +1,7 @@
 import crypto from 'node:crypto'
 import process from 'node:process'
+import {Buffer} from 'node:buffer'
+import {type IncomingMessage} from 'node:http'
 import express, {type NextFunction, type Request, type Response} from 'express'
 import {Sentry} from './instrument.js'
 import {addJobProcessDeclaration, addJobPullUpdatedData} from './queues/jobs.js'
@@ -8,16 +10,18 @@ import {startScheduler} from './queues/scheduler.js'
 import {startWorkers} from './queues/workers.js'
 import {closeQueues} from './queues/config.js'
 
-type RequestWithRawBody = Request & {
-  rawBody?: string
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
 }
+
+const rawBodyByRequest = new WeakMap<IncomingMessage | Request, string>()
 
 const app = express()
 
 app.use(
   express.json({
     verify(request, _response, buffer) {
-      ;(request as RequestWithRawBody).rawBody = buffer.toString('utf8')
+      rawBodyByRequest.set(request, buffer.toString('utf8'))
     },
   }),
 )
@@ -35,7 +39,7 @@ function verifyPleSignature(request: Request): void {
     throw new Error('Missing X-PLE-Signature header')
   }
 
-  const {rawBody} = request as RequestWithRawBody
+  const rawBody = rawBodyByRequest.get(request)
 
   if (!rawBody) {
     throw new Error('Missing raw request body')
@@ -84,41 +88,55 @@ app.post('/jobs/pull-updated-data', async (_request, response, next) => {
   }
 })
 
-app.post('/hooks/declarations', async (request, response, next) => {
-  try {
-    verifyPleSignature(request)
+app.post(
+  '/hooks/declarations',
+  async (
+    request: Request<Record<string, never>, unknown, unknown>,
+    response,
+    next,
+  ) => {
+    try {
+      verifyPleSignature(request)
 
-    const {event, declarationId} = request.body as {
-      event?: string
-      declarationId?: string
-    }
+      const {body} = request
 
-    if (event !== 'declaration.uploaded') {
-      response.status(400).json({
-        ok: false,
-        error: 'Invalid event',
+      if (!isObjectRecord(body)) {
+        response.status(400).json({
+          ok: false,
+          error: 'Invalid request body',
+        })
+        return
+      }
+
+      const {event, declarationId} = body
+
+      if (event !== 'declaration.uploaded') {
+        response.status(400).json({
+          ok: false,
+          error: 'Invalid event',
+        })
+        return
+      }
+
+      if (typeof declarationId !== 'string' || !declarationId) {
+        response.status(400).json({
+          ok: false,
+          error: 'Missing declarationId',
+        })
+        return
+      }
+
+      const job = await addJobProcessDeclaration({declarationId})
+
+      response.status(202).json({
+        ok: true,
+        jobId: job?.id ?? null,
       })
-      return
+    } catch (error) {
+      next(error)
     }
-
-    if (!declarationId) {
-      response.status(400).json({
-        ok: false,
-        error: 'Missing declarationId',
-      })
-      return
-    }
-
-    const job = await addJobProcessDeclaration({declarationId})
-
-    response.status(202).json({
-      ok: true,
-      jobId: job?.id ?? null,
-    })
-  } catch (error) {
-    next(error)
-  }
-})
+  },
+)
 
 app.use(
   (

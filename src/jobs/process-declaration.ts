@@ -40,11 +40,6 @@ type ServiceAccountTokenResponse = {
   token?: string
 }
 
-type DeclarationProcessingContextResponse = {
-  success: boolean
-  data: DeclarationProcessingContext
-}
-
 type LocalDeclarationFile = DeclarationFile & {
   localPath: string
 }
@@ -71,6 +66,92 @@ type LegacyIngestionPayload = {
 type IngestionResult = {
   errors: unknown[]
   data: LegacyIngestionPayload | undefined
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function isDeclarationFile(value: unknown): value is DeclarationFile {
+  if (!isObjectRecord(value)) {
+    return false
+  }
+
+  return (
+    typeof value.id === 'string' &&
+    typeof value.type === 'string' &&
+    typeof value.filename === 'string' &&
+    typeof value.url === 'string'
+  )
+}
+
+function isDeclarationPoint(value: unknown): value is DeclarationPoint {
+  if (!isObjectRecord(value)) {
+    return false
+  }
+
+  if (typeof value.pointId !== 'string' || typeof value.name !== 'string') {
+    return false
+  }
+
+  if (
+    value.sourcePointId !== undefined &&
+    typeof value.sourcePointId !== 'string'
+  ) {
+    return false
+  }
+
+  return (
+    value.mostRecentAvailableDate === undefined ||
+    typeof value.mostRecentAvailableDate === 'string'
+  )
+}
+
+function isDeclarationProcessingContext(
+  value: unknown,
+): value is DeclarationProcessingContext {
+  if (!isObjectRecord(value)) {
+    return false
+  }
+
+  if (
+    typeof value.id !== 'string' ||
+    typeof value.type !== 'string' ||
+    typeof value.declarantUserId !== 'string'
+  ) {
+    return false
+  }
+
+  if (
+    value.autoValidationEnabled !== undefined &&
+    typeof value.autoValidationEnabled !== 'boolean'
+  ) {
+    return false
+  }
+
+  return (
+    Array.isArray(value.files) &&
+    value.files.every((file) => isDeclarationFile(file)) &&
+    Array.isArray(value.points) &&
+    value.points.every((point) => isDeclarationPoint(point))
+  )
+}
+
+function isServiceAccountTokenResponse(
+  value: unknown,
+): value is ServiceAccountTokenResponse {
+  if (!isObjectRecord(value)) {
+    return false
+  }
+
+  const {accessToken, access_token: accessTokenUnderscore, token} = value
+
+  return (
+    (accessToken === undefined || typeof accessToken === 'string') &&
+    (accessTokenUnderscore === undefined ||
+      typeof accessTokenUnderscore === 'string') &&
+    (token === undefined || typeof token === 'string')
+  )
 }
 
 function getRequiredEnv(name: string): string {
@@ -114,7 +195,7 @@ function metricTypeToLegacyParameter(metricType: MetricType): string {
 }
 
 function sanitizeFilename(filename: string): string {
-  return path.basename(filename || 'file').replaceAll(/[^\w.-]+/g, '_')
+  return path.basename(filename || 'file').replaceAll(/[^\w.-]+/gv, '_')
 }
 
 function resolveConnectorName(declarationType: string): string | undefined {
@@ -203,6 +284,7 @@ function metricToLegacySeries(parameters: {
     return undefined
   }
 
+  // eslint-disable-next-line unicorn/no-array-sort
   const sortedValues = [...values].sort((left, right) =>
     left.date.localeCompare(right.date),
   )
@@ -270,7 +352,12 @@ async function getServiceAccountToken(): Promise<string> {
     )
   }
 
-  const body = (await response.json()) as ServiceAccountTokenResponse
+  const body: unknown = await response.json()
+
+  if (!isServiceAccountTokenResponse(body)) {
+    throw new Error('[process-declaration] Invalid token response')
+  }
+
   const token = body.accessToken ?? body.access_token ?? body.token
 
   if (!token) {
@@ -306,20 +393,18 @@ async function getDeclarationProcessingContext(
     )
   }
 
-  const body = (await response.json()) as DeclarationProcessingContextResponse
+  const body: unknown = await response.json()
 
-  if (!body.success || !body.data) {
+  if (!isObjectRecord(body) || body.success !== true) {
     throw new Error(
       '[process-declaration] Invalid declaration context response',
     )
   }
 
-  if (!Array.isArray(body.data.files)) {
-    throw new TypeError('[process-declaration] Invalid declaration files')
-  }
-
-  if (!Array.isArray(body.data.points)) {
-    throw new TypeError('[process-declaration] Invalid declaration points')
+  if (!isDeclarationProcessingContext(body.data)) {
+    throw new TypeError(
+      '[process-declaration] Invalid declaration context data',
+    )
   }
 
   return body.data
@@ -381,7 +466,7 @@ async function runConnectorForDeclaration(parameters: {
       errors: [
         `Type de déclaration non supporté par les connecteurs: ${declaration.type}`,
       ],
-      data: null,
+      data: undefined,
     }
   }
 
@@ -390,7 +475,7 @@ async function runConnectorForDeclaration(parameters: {
   if (!connector) {
     return {
       errors: [`Connecteur introuvable: ${connectorName}`],
-      data: null,
+      data: undefined,
     }
   }
 
@@ -404,7 +489,7 @@ async function runConnectorForDeclaration(parameters: {
       errors: [
         `Aucun fichier exploitable pour la déclaration ${declaration.id}`,
       ],
-      data: null,
+      data: undefined,
     }
   }
 
@@ -457,7 +542,7 @@ async function runConnectorForDeclaration(parameters: {
 
   return {
     errors,
-    data: data.series.length > 0 ? data : null,
+    data: data.series.length > 0 ? data : undefined,
   }
 }
 

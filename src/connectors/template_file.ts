@@ -61,14 +61,14 @@ const DECLARATION_DATE_FORMATS = [
   'DD/MM/YYYY HH:mm',
   'YYYY-MM-DD HH:mm:ss',
   'YYYY-MM-DD HH:mm',
-] as const
+]
 
 function normalizePointIdentifier(value: string): string {
   return value
     .trim()
     .normalize('NFC')
     .toLocaleLowerCase('fr-FR')
-    .replaceAll(/\s+/g, ' ')
+    .replaceAll(/\s+/gv, ' ')
 }
 
 function getSourcePointId(row: TemplateFileRowInput): string | undefined {
@@ -89,23 +89,16 @@ function parseExcelSerialDate(rawDate: number): Date | undefined {
     return undefined
   }
 
-  const parsedDate = XLSX.SSF.parse_date_code(rawDate)
+  const excelEpochUtc = Date.UTC(1899, 11, 30)
+  const millisecondsInDay = 24 * 60 * 60 * 1000
+  const timestamp = excelEpochUtc + Math.round(rawDate * millisecondsInDay)
+  const date = new Date(timestamp)
 
-  if (!parsedDate) {
+  if (Number.isNaN(date.getTime())) {
     return undefined
   }
 
-  const date = moment.utc({
-    year: parsedDate.y,
-    month: parsedDate.m - 1,
-    date: parsedDate.d,
-    hour: parsedDate.H,
-    minute: parsedDate.M,
-    second: Math.floor(parsedDate.S),
-    millisecond: 0,
-  })
-
-  return date.isValid() ? date.toDate() : undefined
+  return date
 }
 
 function parseDeclarationDate(rawDate: unknown): Date | undefined {
@@ -119,7 +112,11 @@ function parseDeclarationDate(rawDate: unknown): Date | undefined {
     return parseExcelSerialDate(rawDate)
   }
 
-  const text = String(rawDate ?? '').trim()
+  if (typeof rawDate !== 'string') {
+    return undefined
+  }
+
+  const text = rawDate.trim()
 
   if (!text) {
     return undefined
@@ -141,10 +138,11 @@ function parseDeclarationNumber(rawValue: unknown): number | undefined {
     return rawValue
   }
 
-  const cleaned = String(rawValue ?? '')
-    .trim()
-    .replaceAll(/\s/g, '')
-    .replace(',', '.')
+  if (typeof rawValue !== 'string') {
+    return undefined
+  }
+
+  const cleaned = rawValue.trim().replaceAll(/\s/gv, '').replace(',', '.')
 
   if (!cleaned) {
     return undefined

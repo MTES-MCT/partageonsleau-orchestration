@@ -137,7 +137,7 @@ export class OrangeLiveObjectsConnector extends BaseConnector<
       )
     }
 
-    const payload = await response.json()
+    const payload: unknown = await response.json()
 
     console.log(
       `[${this.name}] Orange response received for stream="${context.sourcePointId}"`,
