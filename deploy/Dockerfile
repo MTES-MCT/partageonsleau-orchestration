@@ -18,7 +18,7 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 ENV NODE_OPTIONS=--use-openssl-ca
-ENV PORT=3000
+ENV PORT=4000
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends dumb-init ca-certificates \
@@ -34,7 +34,7 @@ ARG ENV_NAME=testing
 COPY deploy/certs/${ENV_NAME}/redis-ca.pem /usr/local/share/ca-certificates/scw-redis-ca.crt
 RUN update-ca-certificates
 
-EXPOSE 3000
+EXPOSE 4000
 
 ENTRYPOINT ["dumb-init", "--"]
 
