@@ -195,7 +195,7 @@ function metricTypeToLegacyParameter(metricType: MetricType): string {
 }
 
 function sanitizeFilename(filename: string): string {
-  return path.basename(filename || 'file').replaceAll(/[^\w.-]+/g, '_')
+  return path.basename(filename || 'file').replaceAll(/[^\w.\-]+/gv, '_')
 }
 
 function resolveConnectorName(declarationType: string): string | undefined {
