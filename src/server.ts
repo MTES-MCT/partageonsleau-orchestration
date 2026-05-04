@@ -9,6 +9,7 @@ import {closeRedisConnection, waitForRedisConnection} from './queues/redis.js'
 import {startScheduler} from './queues/scheduler.js'
 import {startWorkers} from './queues/workers.js'
 import {closeQueues} from './queues/config.js'
+import {createBullBoardRouter} from './queues/board.js'
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -25,6 +26,19 @@ app.use(
     },
   }),
 )
+
+const bullBoardPassword = process.env.BULLBOARD_PASSWORD
+
+if (bullBoardPassword) {
+  const basePath = '/admin/queues'
+  const {router} = createBullBoardRouter(basePath, bullBoardPassword)
+  app.use(basePath, router)
+  console.log(`📊 BullBoard disponible sur ${basePath}`)
+} else if (process.env.NODE_ENV !== 'test') {
+  console.warn(
+    '⚠️  BullBoard désactivé : variable BULLBOARD_PASSWORD non définie',
+  )
+}
 
 function verifyPleSignature(request: Request): void {
   const secret = process.env.PLE_WEBHOOK_SECRET

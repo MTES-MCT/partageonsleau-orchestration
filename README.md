@@ -36,6 +36,7 @@ Variables actuellement utilisees:
 - `PLE_BASE_URL`: URL de base de l'API Partageons l'eau (optionnel tant que le mode mock est actif)
 - `CLIENT_ID`: identifiant client pour generer le JWT service account
 - `CLIENT_SECRET`: secret client pour generer le JWT service account
+- `BULLBOARD_PASSWORD`: mot de passe pour activer BullBoard (dashboard BullMQ)
 
 ## Scripts
 
@@ -43,6 +44,10 @@ Variables actuellement utilisees:
 - `npm run check`: verifie les types TypeScript
 - `npm run build`: compile en `dist/`
 - `npm run start`: lance la version compilee
+
+## Monitoring BullMQ (optionnel)
+
+Le dashboard BullBoard est disponible sur `/admin/queues` si `BULLBOARD_PASSWORD` est renseigne.
 
 ## Architecture
 
