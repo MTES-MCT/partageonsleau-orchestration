@@ -56,9 +56,15 @@ export enum SourceType {
   API = 'API',
 }
 
+export enum ConflictPolicy {
+  REPLACE_EXISTING = 'REPLACE_EXISTING',
+  SKIP_NEW_CHUNK = 'SKIP_NEW_CHUNK',
+}
+
 export type Timeserie = {
   type: MetricType
   granularity: Granularity
+  conflictPolicy: ConflictPolicy
   values: TimeserieValue[]
   unit: MetricUnit | undefined
 }

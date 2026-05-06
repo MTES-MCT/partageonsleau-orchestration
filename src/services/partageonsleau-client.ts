@@ -14,6 +14,46 @@ import {
   type MockDeclarant,
 } from './mock_responses.js'
 
+/**
+ * Client HTTP vers l’API « service account » Partageons l’eau (PLE), utilisé par
+ * l’orchestrateur pour savoir quoi synchroniser et pour pousser les données
+ * normalisées après exécution des connecteurs (Willie, Orange Live Objects, etc.).
+ *
+ * ## Flux normal (orchestration → PLE)
+ *
+ * Le job `pull-updated-data` enchaîne les appels suivants lorsque l’API est
+ * configurée (`PLE_BASE_URL`, `CLIENT_ID`, `CLIENT_SECRET` tous renseignés) :
+ *
+ * 1. **`getAvailableServiceAccounts`** — Retourne `[CLIENT_ID]` : un seul compte
+ *    service est piloté par les identifiants présents dans l’environnement.
+ * 2. **`getServiceAccountToken`** — `POST /service-accounts/token` avec
+ *    `clientId` / `clientSecret` → JWT compte service.
+ * 3. **`getDeclarantsForServiceAccount`** — `GET /service-accounts/me/declarants`
+ *    → liste des déclarants à traiter.
+ * 4. Pour chaque déclarant :
+ *    - **`getContextsForDeclarant`** — `GET .../declarants/:id/context`
+ *      (Bearer = **JWT compte service** dans le job `pull_updated_data` actuel) →
+ *      points d’exploitation, connecteur, paramètres (`sourcePointId`, `sourceFile`, …).
+ *    - **`getDeclarantToken`** existe côté client si PLE ou un autre flux doit
+ *      authentifier le contexte avec un JWT déclarant ; ce n’est pas utilisé
+ *      aujourd’hui par `pull_updated_data`.
+ * 5. Pour chaque point, l’orchestrateur exécute le connecteur puis appelle
+ *    **`ingest`** — `POST /service-accounts/connectors/ingest` (Bearer = JWT
+ *    compte service) avec le payload normalisé et des métadonnées (`point_id`,
+ *    `declarant_id`, `context_id`, `last_run_at`).
+ *
+ * ## Mode hors API (développement)
+ *
+ * Si l’une des trois variables PLE manque, le client bascule sur des données
+ * locales (`mock_responses.ts`) et des faux JWT ; `ingest` ne fait qu’un log.
+ *
+ * ## Réponses « contexte »
+ *
+ * `getContextsForDeclarant` accepte soit un corps avec `data[]` (format legacy),
+ * soit `{ success, exploitations[] }` : dans ce cas un seul contexte synthétique
+ * `declarant:<id>` regroupe tous les points qui ont un `connector.type` défini.
+ */
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
@@ -307,12 +347,41 @@ function normalizePayloadData(data: ParsedPointPayload): ParsedPointPayload {
 function serializePayloadDataForPost(
   data: ParsedPointPayload,
 ): Record<string, unknown> {
+  const granularityForApi = (granularity: Granularity): string => {
+    switch (granularity) {
+      case Granularity.FIFTEEN_MINUTES: {
+        return '15 minutes'
+      }
+
+      case Granularity.HOUR: {
+        return '1 hour'
+      }
+
+      case Granularity.DAY: {
+        return '1 day'
+      }
+
+      case Granularity.WEEK: {
+        return '1 week'
+      }
+
+      case Granularity.MONTH: {
+        return '1 month'
+      }
+
+      case Granularity.YEAR: {
+        return '1 year'
+      }
+    }
+  }
+
   return {
     ...data,
     min_date: data.min_date?.toISOString(),
     max_date: data.max_date?.toISOString(),
     metrics: data.metrics.map((metric) => ({
       ...metric,
+      granularity: granularityForApi(metric.granularity),
       values: metric.values.map((value) => ({
         ...value,
         date: value.date.toISOString(),
@@ -332,11 +401,16 @@ function serializeOutputForPost(
   }
 }
 
+/** Voir le commentaire de module pour le flux orchestration ↔ PLE. */
 export class PartageonsLeauClient {
   private readonly baseUrl = process.env.PLE_BASE_URL
   private readonly clientId = process.env.CLIENT_ID
   private readonly clientSecret = process.env.CLIENT_SECRET
 
+  /**
+   * Comptes service à parcourir. En API réelle : uniquement `CLIENT_ID`
+   * (même identifiant que celui utilisé pour obtenir le token).
+   */
   async getAvailableServiceAccounts(): Promise<string[]> {
     if (this.isApiConfigured() && this.clientId) {
       // En mode API réelle, on exécute l'orchestration sur le SA porté
@@ -347,6 +421,7 @@ export class PartageonsLeauClient {
     return availableServiceAccounts
   }
 
+  /** JWT compte service (Bearer pour `/me/*` et `connectors/ingest`). */
   async getServiceAccountToken(serviceAccount: string): Promise<string> {
     if (!this.isApiConfigured()) {
       return `mock-sa-token:${serviceAccount}`
@@ -381,6 +456,7 @@ export class PartageonsLeauClient {
     return token
   }
 
+  /** Déclarants rattachés au compte service (étape 3 du flux). */
   async getDeclarantsForServiceAccount(
     serviceAccount: string,
     serviceAccountToken: string,
@@ -404,6 +480,11 @@ export class PartageonsLeauClient {
     }))
   }
 
+  /**
+   * JWT déclarant (`POST .../declarants/:id/token`, Bearer = compte service).
+   * Non utilisé par `pull_updated_data` pour l’instant ; à employer si l’API
+   * exige un Bearer déclarant sur `GET .../context`.
+   */
   async getDeclarantToken(
     declarantId: string,
     serviceAccountToken: string,
@@ -442,6 +523,10 @@ export class PartageonsLeauClient {
     return token
   }
 
+  /**
+   * Points à synchroniser par connecteur. Mappe `exploitations[]` vers
+   * `sourcePointId` / `connector` / `sourceFile` depuis `connector.parameters`.
+   */
   async getContextsForDeclarant(
     declarantId: string,
     declarantToken: string,
@@ -508,9 +593,11 @@ export class PartageonsLeauClient {
         }
       })
 
-    console.log(
-      `[PartageonsLeauClient] Declarant ${declarantId}: exploitations=${response.exploitations.length}, connector points=${points.length}`,
-    )
+    if (points.length > 0) {
+      console.log(
+        `[PartageonsLeauClient] Declarant ${declarantId}: exploitations=${response.exploitations.length}, connector points=${points.length}`,
+      )
+    }
 
     return [
       {
@@ -521,12 +608,9 @@ export class PartageonsLeauClient {
   }
 
   /**
-   * Endpoint Partageons l'eau cible (a implementer plus tard):
-   *
-   * But:
-   * - Envoyer le resultat normalise d'un connecteur pour ingestion,
-   *   avec les metadonnees de synchronisation (dont last_run_at).
-   *
+   * Envoie le résultat d’un connecteur vers PLE (étape 5 du flux).
+   * Normalise d’abord les séries temporelles (alignement granularité, agrégation
+   * selon `MetricType`) puis sérialise les dates en ISO pour le JSON.
    */
   async ingest(parameters: {
     output: ConnectorOutput
@@ -538,7 +622,9 @@ export class PartageonsLeauClient {
     const {output, pointId, declarantId, contextId, serviceAccountToken} =
       parameters
 
-    const normalizedData = normalizePayloadData(output.data)
+    const normalizedData = normalizePayloadData({
+      ...output.data,
+    })
 
     const metricCount = normalizedData.metrics.length
     const valueCount = normalizedData.metrics.reduce(
@@ -572,6 +658,7 @@ export class PartageonsLeauClient {
     )
   }
 
+  /** API PLE réelle si base URL + identifiants OAuth compte service sont définis. */
   private isApiConfigured(): boolean {
     return Boolean(this.baseUrl && this.clientId && this.clientSecret)
   }

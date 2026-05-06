@@ -100,20 +100,28 @@ export async function pullUpdatedData(
     )
 
     for (const declarant of declarants) {
-      console.log(
-        `[PullUpdatedData] Traitement déclarant ${declarant.id} (${declarant.name})`,
-      )
-
       const contexts = await partageonsLeauClient.getContextsForDeclarant(
         declarant.id,
         serviceAccountToken,
       )
 
+      const pointsCount = contexts.reduce(
+        (total, context) => total + context.points.length,
+        0,
+      )
+      if (pointsCount === 0) {
+        continue
+      }
+
       console.log(
-        `[PullUpdatedData] Nombre de contextes pour le déclarant ${declarant.id} : ${contexts.length}`,
+        `[PullUpdatedData] Traitement déclarant ${declarant.id} (${declarant.name}), contextes=${contexts.length}, points=${pointsCount}`,
       )
 
       for (const context of contexts) {
+        if (context.points.length === 0) {
+          continue
+        }
+
         console.log(
           `[PullUpdatedData] Contexte ${context.contextId} : ${context.points.length} points`,
         )
