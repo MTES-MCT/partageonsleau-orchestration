@@ -17,7 +17,7 @@ type WillieDatapoint = {
 
 type WillieRawDatapoint = {
   dateTime: string
-  consumption: number
+  consumption: unknown
 }
 
 type WillieStation = {
@@ -61,7 +61,7 @@ function isWillieRawDatapoint(value: unknown): value is WillieRawDatapoint {
   return (
     isObjectRecord(value) &&
     typeof value.dateTime === 'string' &&
-    typeof value.consumption === 'number'
+    (typeof value.consumption === 'number' || value.consumption === null)
   )
 }
 
@@ -126,7 +126,7 @@ export class WillieConnector extends BaseConnector<
 
   private static readonly metric = {
     type: MetricType.VOLUME_PRELEVE,
-    granularity: Granularity.HOUR,
+    granularity: Granularity.DAY,
     conflictPolicy: ConflictPolicy.SKIP_NEW_CHUNK,
     unit: MetricUnit.M3,
   } as const
@@ -189,6 +189,10 @@ export class WillieConnector extends BaseConnector<
       stationID: station.stationID,
       datapoints: station.datapoints
         .map((datapoint) => {
+          if (datapoint.consumption === null) {
+            return undefined
+          }
+
           const dateTime = new Date(datapoint.dateTime)
           if (Number.isNaN(dateTime.getTime())) {
             console.warn(
@@ -206,6 +210,21 @@ export class WillieConnector extends BaseConnector<
           (datapoint): datapoint is WillieDatapoint => datapoint !== undefined,
         ),
     }))
+
+    const rawDatapointCount = rawData.stations.reduce(
+      (count, station) => count + station.datapoints.length,
+      0,
+    )
+    const parsedDatapointCount = stations.reduce(
+      (count, station) => count + station.datapoints.length,
+      0,
+    )
+    const droppedDatapointCount = rawDatapointCount - parsedDatapointCount
+    if (droppedDatapointCount > 0) {
+      console.warn(
+        `[${this.name}] Dropped ${droppedDatapointCount} datapoints with null consumption or invalid date for service account "${context.serviceAccount}" and source point "${context.sourcePointId}".`,
+      )
+    }
 
     return {
       stations,
