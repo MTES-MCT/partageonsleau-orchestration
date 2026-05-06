@@ -5,6 +5,8 @@ import {Buffer} from 'node:buffer'
 import {mkdtemp, rm, writeFile} from 'node:fs/promises'
 import {connectorRegistry} from '../connectors/index.js'
 import {
+  ConflictPolicy,
+  Granularity,
   MetricType,
   type ConnectorOutput,
   type ParsedPointPayload,
@@ -60,6 +62,7 @@ type LegacySeries = {
 }
 
 type LegacyIngestionPayload = {
+  conflictPolicy: ConflictPolicy
   series: LegacySeries[]
 }
 
@@ -311,8 +314,18 @@ function connectorOutputsToLegacyPayload(parameters: {
   }>
 }): LegacyIngestionPayload {
   const series: LegacySeries[] = []
+  let hasOnlyPunctualMetrics = parameters.outputs.length > 0
 
   for (const {point, output} of parameters.outputs) {
+    if (
+      output.data.metrics.length === 0 ||
+      output.data.metrics.some(
+        (metric) => metric.granularity !== Granularity.FIFTEEN_MINUTES,
+      )
+    ) {
+      hasOnlyPunctualMetrics = false
+    }
+
     for (const metric of output.data.metrics) {
       const legacySeries = metricToLegacySeries({
         point,
@@ -326,7 +339,19 @@ function connectorOutputsToLegacyPayload(parameters: {
     }
   }
 
-  return {series}
+  const hasVolumeSeries = series.some(
+    (item) =>
+      item.parameter === metricTypeToLegacyParameter(MetricType.VOLUME_PRELEVE),
+  )
+
+  return {
+    conflictPolicy: hasOnlyPunctualMetrics
+      ? ConflictPolicy.REPLACE
+      : hasVolumeSeries
+        ? ConflictPolicy.SKIP_NEW_CHUNK
+        : ConflictPolicy.REPLACE_EXISTING,
+    series,
+  }
 }
 
 async function getServiceAccountToken(): Promise<string> {
