@@ -346,7 +346,7 @@ function connectorOutputsToLegacyPayload(parameters: {
 
   return {
     conflictPolicy: hasOnlyPunctualMetrics
-      ? ConflictPolicy.REPLACE
+      ? ConflictPolicy.REPLACE_EXISTING
       : hasVolumeSeries
         ? ConflictPolicy.SKIP_NEW_CHUNK
         : ConflictPolicy.REPLACE_EXISTING,

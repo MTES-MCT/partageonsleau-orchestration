@@ -57,7 +57,6 @@ export enum SourceType {
 }
 
 export enum ConflictPolicy {
-  REPLACE = 'REPLACE',
   REPLACE_EXISTING = 'REPLACE_EXISTING',
   SKIP_NEW_CHUNK = 'SKIP_NEW_CHUNK',
 }

@@ -370,7 +370,7 @@ function resolveConflictPolicyForConnector(parameters: {
       (metric) => metric.granularity === Granularity.FIFTEEN_MINUTES,
     )
   if (hasOnlyPunctualMetrics) {
-    return ConflictPolicy.REPLACE
+    return ConflictPolicy.REPLACE_EXISTING
   }
 
   const connectorDefault = CONNECTOR_DEFAULT_CONFLICT_POLICIES[connector]
