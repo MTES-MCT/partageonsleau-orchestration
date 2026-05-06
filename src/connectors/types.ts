@@ -64,6 +64,7 @@ export enum ConflictPolicy {
 export type Timeserie = {
   type: MetricType
   granularity: Granularity
+  conflictPolicy: ConflictPolicy
   values: TimeserieValue[]
   unit: MetricUnit | undefined
 }
@@ -74,7 +75,6 @@ export type ParsedPointPayload = {
   source_metadata: Record<string, unknown> | undefined
   min_date: Date | undefined
   max_date: Date | undefined
-  conflictPolicy?: ConflictPolicy
   metrics: Timeserie[]
 }
 

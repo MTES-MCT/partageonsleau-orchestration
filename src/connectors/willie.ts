@@ -1,5 +1,6 @@
 import {BaseConnector} from './base-connector.js'
 import {
+  ConflictPolicy,
   Granularity,
   MetricType,
   MetricUnit,
@@ -126,6 +127,7 @@ export class WillieConnector extends BaseConnector<
   private static readonly metric = {
     type: MetricType.VOLUME_PRELEVE,
     granularity: Granularity.HOUR,
+    conflictPolicy: ConflictPolicy.SKIP_NEW_CHUNK,
     unit: MetricUnit.M3,
   } as const
 
@@ -241,6 +243,7 @@ export class WillieConnector extends BaseConnector<
         {
           type: WillieConnector.metric.type,
           granularity: WillieConnector.metric.granularity,
+          conflictPolicy: WillieConnector.metric.conflictPolicy,
           values: this.mapWillieDatapointsToMetricValues(datapoints),
           unit: WillieConnector.metric.unit,
         },

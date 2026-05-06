@@ -1,5 +1,4 @@
 import {
-  ConflictPolicy,
   Granularity,
   MetricType,
   type DeclarantContext,
@@ -14,15 +13,6 @@ import {
   declarantsByServiceAccount,
   type MockDeclarant,
 } from './mock_responses.js'
-
-const DEFAULT_CONFLICT_POLICY = ConflictPolicy.REPLACE_EXISTING
-const CONNECTOR_DEFAULT_CONFLICT_POLICIES: Record<string, ConflictPolicy> = {
-  // Default strategy for volumetric connectors: do not overwrite history by default.
-  willie: ConflictPolicy.SKIP_NEW_CHUNK,
-  orange_live_objects: ConflictPolicy.SKIP_NEW_CHUNK,
-  aquasys: ConflictPolicy.SKIP_NEW_CHUNK,
-  template_file: ConflictPolicy.SKIP_NEW_CHUNK,
-}
 
 /**
  * Client HTTP vers l’API « service account » Partageons l’eau (PLE), utilisé par
@@ -348,54 +338,50 @@ function normalizePayloadData(data: ParsedPointPayload): ParsedPointPayload {
 
   return {
     ...data,
-    conflictPolicy: data.conflictPolicy ?? DEFAULT_CONFLICT_POLICY,
     metrics: normalizedMetrics,
     min_date: allMetricDates.length > 0 ? allMetricDates[0] : data.min_date,
     max_date: allMetricDates.length > 0 ? allMetricDates.at(-1) : data.max_date,
   }
 }
 
-function resolveConflictPolicyForConnector(parameters: {
-  connector: string
-  payloadData: ParsedPointPayload
-}): ConflictPolicy {
-  const {connector, payloadData} = parameters
-  if (payloadData.conflictPolicy) {
-    return payloadData.conflictPolicy
-  }
-
-  const hasOnlyPunctualMetrics =
-    payloadData.metrics.length > 0 &&
-    payloadData.metrics.every(
-      (metric) => metric.granularity === Granularity.FIFTEEN_MINUTES,
-    )
-  if (hasOnlyPunctualMetrics) {
-    return ConflictPolicy.REPLACE_EXISTING
-  }
-
-  const connectorDefault = CONNECTOR_DEFAULT_CONFLICT_POLICIES[connector]
-  if (connectorDefault) {
-    return connectorDefault
-  }
-
-  const hasVolumeMetric = payloadData.metrics.some(
-    (metric) => metric.type === MetricType.VOLUME_PRELEVE,
-  )
-
-  return hasVolumeMetric
-    ? ConflictPolicy.SKIP_NEW_CHUNK
-    : DEFAULT_CONFLICT_POLICY
-}
-
 function serializePayloadDataForPost(
   data: ParsedPointPayload,
 ): Record<string, unknown> {
+  const granularityForApi = (granularity: Granularity): string => {
+    switch (granularity) {
+      case Granularity.FIFTEEN_MINUTES: {
+        return '15 minutes'
+      }
+
+      case Granularity.HOUR: {
+        return '1 hour'
+      }
+
+      case Granularity.DAY: {
+        return '1 day'
+      }
+
+      case Granularity.WEEK: {
+        return '1 week'
+      }
+
+      case Granularity.MONTH: {
+        return '1 month'
+      }
+
+      case Granularity.YEAR: {
+        return '1 year'
+      }
+    }
+  }
+
   return {
     ...data,
     min_date: data.min_date?.toISOString(),
     max_date: data.max_date?.toISOString(),
     metrics: data.metrics.map((metric) => ({
       ...metric,
+      granularity: granularityForApi(metric.granularity),
       values: metric.values.map((value) => ({
         ...value,
         date: value.date.toISOString(),
@@ -607,9 +593,11 @@ export class PartageonsLeauClient {
         }
       })
 
-    console.log(
-      `[PartageonsLeauClient] Declarant ${declarantId}: exploitations=${response.exploitations.length}, connector points=${points.length}`,
-    )
+    if (points.length > 0) {
+      console.log(
+        `[PartageonsLeauClient] Declarant ${declarantId}: exploitations=${response.exploitations.length}, connector points=${points.length}`,
+      )
+    }
 
     return [
       {
@@ -636,10 +624,6 @@ export class PartageonsLeauClient {
 
     const normalizedData = normalizePayloadData({
       ...output.data,
-      conflictPolicy: resolveConflictPolicyForConnector({
-        connector: output.connector,
-        payloadData: output.data,
-      }),
     })
 
     const metricCount = normalizedData.metrics.length
