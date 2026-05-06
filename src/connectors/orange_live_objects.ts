@@ -1,5 +1,6 @@
 import {BaseConnector} from './base-connector.js'
 import {
+  ConflictPolicy,
   Granularity,
   MetricType,
   MetricUnit,
@@ -88,6 +89,7 @@ export class OrangeLiveObjectsConnector extends BaseConnector<
   private static readonly metric = {
     type: MetricType.INDEX,
     granularity: Granularity.FIFTEEN_MINUTES,
+    conflictPolicy: ConflictPolicy.REPLACE_EXISTING,
     unit: MetricUnit.M3,
   } as const
 
@@ -189,6 +191,7 @@ export class OrangeLiveObjectsConnector extends BaseConnector<
         {
           type: OrangeLiveObjectsConnector.metric.type,
           granularity: OrangeLiveObjectsConnector.metric.granularity,
+          conflictPolicy: OrangeLiveObjectsConnector.metric.conflictPolicy,
           values: parsedData.values,
           unit: OrangeLiveObjectsConnector.metric.unit,
         },

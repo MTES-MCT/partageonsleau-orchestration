@@ -347,12 +347,41 @@ function normalizePayloadData(data: ParsedPointPayload): ParsedPointPayload {
 function serializePayloadDataForPost(
   data: ParsedPointPayload,
 ): Record<string, unknown> {
+  const granularityForApi = (granularity: Granularity): string => {
+    switch (granularity) {
+      case Granularity.FIFTEEN_MINUTES: {
+        return '15 minutes'
+      }
+
+      case Granularity.HOUR: {
+        return '1 hour'
+      }
+
+      case Granularity.DAY: {
+        return '1 day'
+      }
+
+      case Granularity.WEEK: {
+        return '1 week'
+      }
+
+      case Granularity.MONTH: {
+        return '1 month'
+      }
+
+      case Granularity.YEAR: {
+        return '1 year'
+      }
+    }
+  }
+
   return {
     ...data,
     min_date: data.min_date?.toISOString(),
     max_date: data.max_date?.toISOString(),
     metrics: data.metrics.map((metric) => ({
       ...metric,
+      granularity: granularityForApi(metric.granularity),
       values: metric.values.map((value) => ({
         ...value,
         date: value.date.toISOString(),
@@ -564,9 +593,11 @@ export class PartageonsLeauClient {
         }
       })
 
-    console.log(
-      `[PartageonsLeauClient] Declarant ${declarantId}: exploitations=${response.exploitations.length}, connector points=${points.length}`,
-    )
+    if (points.length > 0) {
+      console.log(
+        `[PartageonsLeauClient] Declarant ${declarantId}: exploitations=${response.exploitations.length}, connector points=${points.length}`,
+      )
+    }
 
     return [
       {
@@ -591,7 +622,9 @@ export class PartageonsLeauClient {
     const {output, pointId, declarantId, contextId, serviceAccountToken} =
       parameters
 
-    const normalizedData = normalizePayloadData(output.data)
+    const normalizedData = normalizePayloadData({
+      ...output.data,
+    })
 
     const metricCount = normalizedData.metrics.length
     const valueCount = normalizedData.metrics.reduce(

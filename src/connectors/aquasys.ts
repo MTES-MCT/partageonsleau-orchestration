@@ -2,6 +2,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import * as XLSX from 'xlsx'
 import {
+  ConflictPolicy,
   Granularity,
   MetricType,
   MetricUnit,
@@ -177,6 +178,10 @@ export class AquasysConnector extends BaseConnector<
   private static readonly metric = {
     granularity: Granularity.DAY,
     unit: MetricUnit.M3,
+    conflictPolicyByType: {
+      [MetricType.INDEX]: ConflictPolicy.SKIP_NEW_CHUNK,
+      [MetricType.VOLUME_PRELEVE]: ConflictPolicy.SKIP_NEW_CHUNK,
+    } as const,
     supportedTypes: [MetricType.INDEX, MetricType.VOLUME_PRELEVE],
   } as const
 
@@ -262,6 +267,7 @@ export class AquasysConnector extends BaseConnector<
     const metrics = [...byType.entries()].map(([type, values]) => ({
       type,
       granularity: AquasysConnector.metric.granularity,
+      conflictPolicy: AquasysConnector.metric.conflictPolicyByType[type],
       values: values.map((value) => ({
         date: value.date,
         value: value.value,

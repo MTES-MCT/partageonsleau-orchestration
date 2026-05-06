@@ -3,6 +3,7 @@ import path from 'node:path'
 import moment from 'moment'
 import * as XLSX from 'xlsx'
 import {
+  ConflictPolicy,
   Granularity,
   MetricType,
   MetricUnit,
@@ -209,6 +210,7 @@ export class TemplateFileConnector extends BaseConnector<
   private static readonly metric = {
     type: MetricType.VOLUME_PRELEVE,
     granularity: Granularity.DAY,
+    conflictPolicy: ConflictPolicy.SKIP_NEW_CHUNK,
     unit: MetricUnit.M3,
   } as const
 
@@ -301,6 +303,7 @@ export class TemplateFileConnector extends BaseConnector<
     const metrics = [...byType.entries()].map(([type, values]) => ({
       type,
       granularity: TemplateFileConnector.metric.granularity,
+      conflictPolicy: TemplateFileConnector.metric.conflictPolicy,
       values: values.map((value) => ({
         date: value.date,
         value: value.value,
