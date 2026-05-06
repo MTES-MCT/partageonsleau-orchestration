@@ -24,6 +24,10 @@ Un second job, `process-declaration`, traite les déclarations déposées sur PL
 - **moment**, **xlsx** — utilitaires métier (ex. traitement de déclarations)
 - **xo** — lint (script `test`)
 
+## Monitoring BullMQ (optionnel)
+
+Le dashboard BullBoard est disponible sur `/admin/queues` si `BULLBOARD_PASSWORD` est renseigne.
+
 ## Prérequis
 
 - **Redis** accessible (obligatoire au démarrage). En local : `docker compose up -d` — Redis écoute sur le port **6380** (mappé depuis 6379 dans le conteneur), cohérent avec `REDIS_URL` dans `.env.example`.
@@ -51,6 +55,12 @@ Copier `.env.example` vers `.env` et renseigner les variables.
 | `SENTRY_DSN` / `SENTRY_ENV` | Télémétrie Sentry (optionnel) |
 
 **Mode PLE** : si `PLE_BASE_URL`, `CLIENT_ID` et `CLIENT_SECRET` sont tous renseignés, le client appelle l’API réelle (tokens, déclarants, contextes, `ingest`). Sinon, les réponses sont tirées de `mock_responses.ts` et l’ingestion ne fait qu’un log (pas d’appel HTTP).
+- `WILLIE_API_TOKEN`: token Bearer pour l'API Willie
+- `ORANGE_LIVE_OBJECTS_API_KEY`: cle API pour l'API Orange Live Objects
+- `PLE_BASE_URL`: URL de base de l'API Partageons l'eau (optionnel tant que le mode mock est actif)
+- `CLIENT_ID`: identifiant client pour generer le JWT service account
+- `CLIENT_SECRET`: secret client pour generer le JWT service account
+- `BULLBOARD_PASSWORD`: mot de passe pour activer BullBoard (dashboard BullMQ)
 
 ## Scripts
 
