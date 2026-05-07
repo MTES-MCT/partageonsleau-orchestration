@@ -64,6 +64,8 @@ type DeclarantContextPayload = {
     pointId: string
     sourcePointId: string
     connector: string
+    connectorId?: string | undefined
+    connectorRate?: number | undefined
     mostRecentAvailableDate: string | undefined
     sourceFile: string
   }>
@@ -84,9 +86,19 @@ type DeclarantContextApiResponse = {
       name?: string
     }
     mostRecentAvailableDate?: string | undefined
+    connectors?:
+      | Array<{
+          id?: string | undefined
+          type?: string | undefined
+          rate?: number | undefined
+          parameters?: Record<string, unknown> | undefined
+        }>
+      | undefined
     connector?:
       | {
+          id?: string | undefined
           type?: string | undefined
+          rate?: number | undefined
           parameters?: Record<string, unknown> | undefined
         }
       | undefined
@@ -110,6 +122,10 @@ function isDeclarantContextPayload(
       (point.pointId === undefined || typeof point.pointId === 'string') &&
       typeof point.sourcePointId === 'string' &&
       typeof point.connector === 'string' &&
+      (point.connectorId === undefined ||
+        typeof point.connectorId === 'string') &&
+      (point.connectorRate === undefined ||
+        typeof point.connectorRate === 'number') &&
       (point.mostRecentAvailableDate === undefined ||
         typeof point.mostRecentAvailableDate === 'string') &&
       (point.sourceFile === undefined || typeof point.sourceFile === 'string')
@@ -150,18 +166,31 @@ function isDeclarantContextApiResponse(
       return false
     }
 
-    const {connector} = exploitation
+    const {connector, connectors} = exploitation
 
-    const hasValidConnector =
-      connector === undefined ||
-      connector === null ||
-      (isRecord(connector) &&
-        (connector.type === undefined ||
-          connector.type === null ||
-          typeof connector.type === 'string') &&
-        (connector.parameters === undefined ||
-          connector.parameters === null ||
-          isRecord(connector.parameters)))
+    const isValidConnector = (value: unknown): boolean =>
+      value === undefined ||
+      value === null ||
+      (isRecord(value) &&
+        (value.id === undefined ||
+          value.id === null ||
+          typeof value.id === 'string') &&
+        (value.type === undefined ||
+          value.type === null ||
+          typeof value.type === 'string') &&
+        (value.rate === undefined ||
+          value.rate === null ||
+          typeof value.rate === 'number') &&
+        (value.parameters === undefined ||
+          value.parameters === null ||
+          isRecord(value.parameters)))
+
+    const hasValidConnector = isValidConnector(connector)
+    const hasValidConnectors =
+      connectors === undefined ||
+      connectors === null ||
+      (Array.isArray(connectors) &&
+        connectors.every((connector) => isValidConnector(connector)))
 
     return (
       typeof exploitation.point.id === 'string' &&
@@ -170,7 +199,8 @@ function isDeclarantContextApiResponse(
       (exploitation.mostRecentAvailableDate === undefined ||
         exploitation.mostRecentAvailableDate === null ||
         typeof exploitation.mostRecentAvailableDate === 'string') &&
-      hasValidConnector
+      hasValidConnector &&
+      hasValidConnectors
     )
   })
 }
@@ -186,6 +216,14 @@ function toOptionalDate(value: string | undefined): Date | undefined {
   }
 
   return parsed
+}
+
+function normalizeRate(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return 100
+  }
+
+  return value
 }
 
 function alignDateToGranularity(date: Date, granularity: Granularity): Date {
@@ -551,6 +589,8 @@ export class PartageonsLeauClient {
             pointId: point.pointId,
             sourcePointId: point.sourcePointId,
             connector: point.connector,
+            connectorId: point.connectorId,
+            connectorRate: normalizeRate(point.connectorRate),
             mostRecentAvailableDate: toOptionalDate(
               point.mostRecentAvailableDate,
             ),
@@ -568,36 +608,48 @@ export class PartageonsLeauClient {
       return []
     }
 
-    const points = response.exploitations
-      .filter((exploitation) => {
-        const connectorType = exploitation.connector?.type
+    const points = response.exploitations.flatMap((exploitation) => {
+      const connectors =
+        exploitation.connectors && exploitation.connectors.length > 0
+          ? exploitation.connectors
+          : exploitation.connector
+            ? [exploitation.connector]
+            : []
 
-        return typeof connectorType === 'string' && connectorType.length > 0
-      })
-      .map((exploitation) => {
-        const connectorParameters = exploitation.connector?.parameters ?? {}
-        const {sourceFile} = connectorParameters
-        const {sourcePointId} = connectorParameters
+      return connectors
+        .filter((connector) => {
+          const connectorType = connector.type
 
-        return {
-          pointId: exploitation.point.id,
-          sourcePointId:
-            typeof sourcePointId === 'string'
-              ? sourcePointId
-              : exploitation.point.id,
-          connector: exploitation.connector?.type ?? '',
-          mostRecentAvailableDate: toOptionalDate(
-            exploitation.mostRecentAvailableDate ?? undefined,
-          ),
-          sourceFile: typeof sourceFile === 'string' ? sourceFile : undefined,
-        }
-      })
+          return typeof connectorType === 'string' && connectorType.length > 0
+        })
+        .map((connector) => {
+          const connectorParameters = connector.parameters ?? {}
+          const {sourceFile} = connectorParameters
+          const {sourcePointId} = connectorParameters
 
-    if (points.length > 0) {
-      console.log(
-        `[PartageonsLeauClient] Declarant ${declarantId}: exploitations=${response.exploitations.length}, connector points=${points.length}`,
-      )
-    }
+          return {
+            pointId: exploitation.point.id,
+            sourcePointId:
+              typeof sourcePointId === 'string'
+                ? sourcePointId
+                : exploitation.point.id,
+            connector: connector.type ?? '',
+            connectorId:
+              typeof connector.id === 'string' ? connector.id : undefined,
+            connectorRate: normalizeRate(connector.rate),
+            mostRecentAvailableDate: toOptionalDate(
+              exploitation.mostRecentAvailableDate ?? undefined,
+            ),
+            sourceFile: typeof sourceFile === 'string' ? sourceFile : undefined,
+          }
+        })
+    })
+
+    console.log(
+      `[PartageonsLeauClient] Declarant ${declarantId}: ` +
+        `exploitations=${response.exploitations.length}, ` +
+        `connector points=${points.length}`,
+    )
 
     return [
       {
@@ -622,9 +674,7 @@ export class PartageonsLeauClient {
     const {output, pointId, declarantId, contextId, serviceAccountToken} =
       parameters
 
-    const normalizedData = normalizePayloadData({
-      ...output.data,
-    })
+    const normalizedData = normalizePayloadData(output.data)
 
     const metricCount = normalizedData.metrics.length
     const valueCount = normalizedData.metrics.reduce(
@@ -640,13 +690,19 @@ export class PartageonsLeauClient {
         point_id: pointId,
         declarant_id: declarantId,
         context_id: contextId,
+        connector_id: output.connectorId,
+        connector_rate: output.connectorRate,
         last_run_at: output.lastRunAt.toISOString(),
       },
     }
 
     if (!this.isApiConfigured()) {
       console.log(
-        `[PartageonsLeauClient] Ingesting ${metricCount} metrics (${valueCount} values) for service account: ${output.serviceAccount} and source point: ${output.sourcePointId} with last_run_at=${output.lastRunAt.toISOString()}.`,
+        `[PartageonsLeauClient] Ingesting ${metricCount} metrics ` +
+          `(${valueCount} values) for service account: ${output.serviceAccount} ` +
+          `and source point: ${output.sourcePointId} ` +
+          `with rate=${output.connectorRate}% ` +
+          `and last_run_at=${output.lastRunAt.toISOString()}.`,
       )
       return
     }

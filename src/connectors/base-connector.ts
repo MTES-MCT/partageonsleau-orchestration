@@ -19,6 +19,8 @@ export abstract class BaseConnector<TRawData, TParsedData> {
       connector: this.name,
       serviceAccount: context.serviceAccount,
       sourcePointId: context.sourcePointId,
+      connectorId: context.connectorId,
+      connectorRate: context.rate,
       lastRunAt: new Date(),
       data: parsedData,
     }
