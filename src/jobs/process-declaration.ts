@@ -6,9 +6,9 @@ import {mkdtemp, rm, writeFile} from 'node:fs/promises'
 import {connectorRegistry} from '../connectors/index.js'
 import {
   ConflictPolicy,
+  type ConnectorOutput,
   Granularity,
   MetricType,
-  type ConnectorOutput,
   type ParsedPointPayload,
   type Timeserie,
 } from '../connectors/types.js'
@@ -599,7 +599,10 @@ async function postIngestionResult(parameters: {
       },
       body: JSON.stringify({
         errors: parameters.result.errors,
-        data: parameters.result.data,
+        data: parameters.result.data ?? {
+          conflictPolicy: ConflictPolicy.REPLACE_EXISTING,
+          series: [],
+        },
       }),
     },
   )
