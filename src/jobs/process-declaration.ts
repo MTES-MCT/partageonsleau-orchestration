@@ -239,28 +239,32 @@ function resolveSourcePointId(parameters: {
   return point.pointId
 }
 
-function selectFileForConnector(parameters: {
+function selectFilesForConnector(parameters: {
   declarationType: string
   files: LocalDeclarationFile[]
-}): LocalDeclarationFile | undefined {
+}): LocalDeclarationFile[] {
   const {declarationType, files} = parameters
 
   switch (declarationType) {
     case 'template-file': {
-      return files.find((file) => file.type === 'template-file') ?? files[0]
+      const templateFiles = files.filter(
+        (file) => file.type === 'template-file',
+      )
+
+      return templateFiles.length > 0 ? templateFiles : files
     }
 
     case 'aquasys':
     case 'extract-aquasys': {
-      return (
-        files.find((file) => file.type === 'aquasys') ??
-        files.find((file) => file.type === 'extract-aquasys') ??
-        files[0]
+      const aquasysFiles = files.filter(
+        (file) => file.type === 'aquasys' || file.type === 'extract-aquasys',
       )
+
+      return aquasysFiles.length > 0 ? aquasysFiles : files
     }
 
     default: {
-      return undefined
+      return []
     }
   }
 }
@@ -504,12 +508,12 @@ async function runConnectorForDeclaration(parameters: {
     }
   }
 
-  const sourceFile = selectFileForConnector({
+  const sourceFiles = selectFilesForConnector({
     declarationType: declaration.type,
     files: localFiles,
   })
 
-  if (!sourceFile) {
+  if (sourceFiles.length === 0) {
     return {
       errors: [
         `Aucun fichier exploitable pour la déclaration ${declaration.id}`,
@@ -523,41 +527,45 @@ async function runConnectorForDeclaration(parameters: {
     output: ConnectorOutput
   }> = []
 
-  for (const point of declaration.points) {
-    const sourcePointId = resolveSourcePointId({
-      connectorName,
-      point,
-    })
-
-    try {
-      const output = await connector.run({
-        serviceAccount: 'declaration-upload',
-        sourcePointId,
-        sourceFile: sourceFile.localPath,
-        // Pour une déclaration, on veut relire tout le fichier.
-        // On ne veut pas filtrer à partir de la date d'activation du connecteur.
-        mostRecentAvailableDate:
-          parseOptionalDate(point.mostRecentAvailableDate) ??
-          new Date('1900-01-01T00:00:00.000Z'),
-      })
-
-      if (!hasValues(output)) {
-        continue
-      }
-
-      outputs.push({
+  for (const sourceFile of sourceFiles) {
+    for (const point of declaration.points) {
+      const sourcePointId = resolveSourcePointId({
+        connectorName,
         point,
-        output,
       })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
 
-      errors.push({
-        pointId: point.pointId,
-        pointName: point.name,
-        connector: connectorName,
-        error: message,
-      })
+      try {
+        const output = await connector.run({
+          serviceAccount: 'declaration-upload',
+          sourcePointId,
+          sourceFile: sourceFile.localPath,
+          // Pour une déclaration, on veut relire tout le fichier.
+          // On ne veut pas filtrer à partir de la date d'activation du connecteur.
+          mostRecentAvailableDate:
+            parseOptionalDate(point.mostRecentAvailableDate) ??
+            new Date('1900-01-01T00:00:00.000Z'),
+        })
+
+        if (!hasValues(output)) {
+          continue
+        }
+
+        outputs.push({
+          point,
+          output,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+
+        errors.push({
+          pointId: point.pointId,
+          pointName: point.name,
+          fileId: sourceFile.id,
+          filename: sourceFile.filename,
+          connector: connectorName,
+          error: message,
+        })
+      }
     }
   }
 
