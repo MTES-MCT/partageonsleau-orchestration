@@ -247,7 +247,9 @@ function selectFilesForConnector(parameters: {
 
   switch (declarationType) {
     case 'template-file': {
-      const templateFiles = files.filter((file) => file.type === 'template-file')
+      const templateFiles = files.filter(
+        (file) => file.type === 'template-file',
+      )
 
       return templateFiles.length > 0 ? templateFiles : files
     }
