@@ -24,6 +24,8 @@ async function processPoint(parameters: {
   const {
     pointId,
     connector: connectorName,
+    connectorId,
+    connectorRate,
     sourcePointId,
     mostRecentAvailableDate,
     sourceFile,
@@ -42,6 +44,8 @@ async function processPoint(parameters: {
     const output = await connector.run({
       serviceAccount,
       sourcePointId,
+      connectorId,
+      rate: connectorRate,
       mostRecentAvailableDate,
       sourceFile,
     })

@@ -538,6 +538,7 @@ async function runConnectorForDeclaration(parameters: {
         const output = await connector.run({
           serviceAccount: 'declaration-upload',
           sourcePointId,
+          rate: 100,
           sourceFile: sourceFile.localPath,
           // Pour une déclaration, on veut relire tout le fichier.
           // On ne veut pas filtrer à partir de la date d'activation du connecteur.

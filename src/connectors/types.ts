@@ -6,6 +6,8 @@ export type ServiceAccountPointContext = {
   pointId: string
   sourcePointId: string
   connector: string
+  connectorId?: string
+  connectorRate: number
   mostRecentAvailableDate: Date | undefined
   sourceFile?: string
 }
@@ -23,6 +25,8 @@ export type DeclarantContext = {
 export type ConnectorRunContext = {
   serviceAccount: string
   sourcePointId: string
+  connectorId?: string
+  rate: number
   mostRecentAvailableDate: Date | undefined
   sourceFile?: string
 }
@@ -82,6 +86,8 @@ export type ConnectorOutput = {
   connector: string
   serviceAccount: string
   sourcePointId: string
+  connectorId?: string
+  connectorRate: number
   lastRunAt: Date
   data: ParsedPointPayload
 }
