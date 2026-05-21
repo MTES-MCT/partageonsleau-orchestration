@@ -729,6 +729,8 @@ function buildParsedPayload(parameters: {
         'La valeur horodatée à J 00:00 est rattachée à la journée J-1.',
     },
     metrics: [metric],
+    min_date: undefined,
+    max_date: undefined,
   } satisfies ParsedPointPayload
 
   if (firstValue) {
