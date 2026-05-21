@@ -212,6 +212,10 @@ function resolveConnectorName(declarationType: string): string | undefined {
       return 'aquasys'
     }
 
+    case 'bv-tech': {
+      return 'bv_tech'
+    }
+
     default: {
       return undefined
     }
@@ -236,6 +240,10 @@ function resolveSourcePointId(parameters: {
     return point.name
   }
 
+  if (connectorName === 'bv_tech') {
+    return point.name
+  }
+
   return point.pointId
 }
 
@@ -252,6 +260,11 @@ function selectFilesForConnector(parameters: {
       )
 
       return templateFiles.length > 0 ? templateFiles : files
+    }
+
+    case 'bv-tech': {
+      const bvTechFiles = files.filter((file) => file.type === 'bv-tech')
+      return bvTechFiles.length > 0 ? bvTechFiles : files
     }
 
     case 'aquasys':
