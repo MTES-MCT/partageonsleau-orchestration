@@ -93,5 +93,5 @@ jobs:
       - name: Update container image and redeploy
         run: |
           scw container container update "$SCW_CONTAINER_ID" \
-            registry-image="${SCW_REGISTRY_ENDPOINT}/${SCW_IMAGE_NAME}:${IMAGE_TAG}" \
+            image="${SCW_REGISTRY_ENDPOINT}/${SCW_IMAGE_NAME}:${IMAGE_TAG}" \
             region="$SCW_DEFAULT_REGION"
