@@ -11,6 +11,7 @@ import {
   MetricType,
   type ParsedPointPayload,
   type Timeserie,
+  type UsageEau,
 } from '../connectors/types.js'
 
 type DeclarationFile = {
@@ -53,6 +54,7 @@ type LegacySeriesValue = {
 
 type LegacySeries = {
   pointPrelevement: string
+  usage?: UsageEau
   parameter: string
   unit: string | undefined
   frequency: string
@@ -311,6 +313,7 @@ function metricToLegacySeries(parameters: {
 
   return {
     pointPrelevement: point.name,
+    ...(metric.usage ? {usage: metric.usage} : {}),
     parameter: metricTypeToLegacyParameter(metric.type),
     unit: metric.unit,
     frequency: metric.granularity,
