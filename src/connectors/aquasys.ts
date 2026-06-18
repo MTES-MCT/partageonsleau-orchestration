@@ -18,6 +18,8 @@ type AquasysBaseRow = {
   value: number
 }
 
+type AquasysMetricType = MetricType.INDEX | MetricType.VOLUME_PRELEVE
+
 type AquasysIndexRow = AquasysBaseRow & {
   metricType: MetricType.INDEX
 }
@@ -51,7 +53,9 @@ const AQUASYS_DATE_COLUMN = 'Date de mesure'
 const AQUASYS_DATE_END_COLUMN = 'Date de fin'
 const AQUASYS_VALUE_COLUMN = 'Mesure'
 
-function parseAquasysMetricType(rawMetric: string): MetricType | undefined {
+function parseAquasysMetricType(
+  rawMetric: string,
+): AquasysMetricType | undefined {
   const normalized = String(rawMetric).trim().toLowerCase()
   if (normalized === 'index') {
     return MetricType.INDEX
@@ -257,7 +261,10 @@ export class AquasysConnector extends BaseConnector<
     }
 
     // Split les records en fonction de leur type: index ou volume
-    const byType = new Map<MetricType, Array<{date: Date; value: number}>>()
+    const byType = new Map<
+      AquasysMetricType,
+      Array<{date: Date; value: number}>
+    >()
     for (const record of records) {
       const values = byType.get(record.metricType) ?? []
       values.push({date: record.dateStart, value: record.value})

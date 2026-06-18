@@ -7,6 +7,7 @@ import {connectorRegistry} from '../connectors/index.js'
 import {
   ConflictPolicy,
   type ConnectorOutput,
+  type ConnectorSourceFile,
   Granularity,
   MetricType,
   type ParsedPointPayload,
@@ -24,6 +25,7 @@ type DeclarationFile = {
 type DeclarationPoint = {
   pointId: string
   name: string
+  sourceId?: string | undefined
   sourcePointId?: string
   mostRecentAvailableDate?: string | undefined
 }
@@ -96,6 +98,10 @@ function isDeclarationPoint(value: unknown): value is DeclarationPoint {
   }
 
   if (typeof value.pointId !== 'string' || typeof value.name !== 'string') {
+    return false
+  }
+
+  if (value.sourceId !== undefined && typeof value.sourceId !== 'string') {
     return false
   }
 
@@ -193,6 +199,10 @@ function metricTypeToLegacyParameter(metricType: MetricType): string {
       return 'volume prélevé'
     }
 
+    case MetricType.VOLUME_REJETE: {
+      return 'volume rejeté'
+    }
+
     case MetricType.INDEX: {
       return 'index'
     }
@@ -216,6 +226,10 @@ function resolveConnectorName(declarationType: string): string | undefined {
 
     case 'bv-tech': {
       return 'bv_tech'
+    }
+
+    case 'gidaf': {
+      return 'gidaf'
     }
 
     default: {
@@ -244,6 +258,10 @@ function resolveSourcePointId(parameters: {
 
   if (connectorName === 'bv_tech') {
     return point.name
+  }
+
+  if (connectorName === 'gidaf') {
+    return point.sourceId ?? point.sourcePointId ?? point.name
   }
 
   return point.pointId
@@ -278,10 +296,52 @@ function selectFilesForConnector(parameters: {
       return aquasysFiles.length > 0 ? aquasysFiles : files
     }
 
+    case 'gidaf': {
+      const gidafFiles = files.filter((file) =>
+        ['gidaf', 'gidaf-cadres', 'gidaf-prelevements'].includes(file.type),
+      )
+
+      return gidafFiles.length > 0 ? gidafFiles : files
+    }
+
     default: {
       return []
     }
   }
+}
+
+function toConnectorSourceFiles(
+  files: LocalDeclarationFile[],
+): ConnectorSourceFile[] {
+  return files.map((file) => ({
+    type: file.type,
+    filename: file.filename,
+    path: file.localPath,
+  }))
+}
+
+function buildConnectorFileBatches(parameters: {
+  connectorName: string
+  sourceFiles: LocalDeclarationFile[]
+}): Array<{
+  sourceFile: LocalDeclarationFile | undefined
+  sourceFiles: LocalDeclarationFile[]
+}> {
+  const {connectorName, sourceFiles} = parameters
+
+  if (connectorName === 'gidaf') {
+    return [
+      {
+        sourceFile: undefined,
+        sourceFiles,
+      },
+    ]
+  }
+
+  return sourceFiles.map((sourceFile) => ({
+    sourceFile,
+    sourceFiles: [sourceFile],
+  }))
 }
 
 function hasValues(output: ConnectorOutput): boolean {
@@ -543,7 +603,12 @@ async function runConnectorForDeclaration(parameters: {
     output: ConnectorOutput
   }> = []
 
-  for (const sourceFile of sourceFiles) {
+  const fileBatches = buildConnectorFileBatches({
+    connectorName,
+    sourceFiles,
+  })
+
+  for (const fileBatch of fileBatches) {
     for (const point of declaration.points) {
       const sourcePointId = resolveSourcePointId({
         connectorName,
@@ -555,7 +620,8 @@ async function runConnectorForDeclaration(parameters: {
           serviceAccount: 'declaration-upload',
           sourcePointId,
           rate: 100,
-          sourceFile: sourceFile.localPath,
+          sourceFile: fileBatch.sourceFile?.localPath,
+          sourceFiles: toConnectorSourceFiles(fileBatch.sourceFiles),
           // Pour une déclaration, on veut relire tout le fichier.
           // On ne veut pas filtrer à partir de la date d'activation du connecteur.
           mostRecentAvailableDate:
@@ -577,8 +643,12 @@ async function runConnectorForDeclaration(parameters: {
         errors.push({
           pointId: point.pointId,
           pointName: point.name,
-          fileId: sourceFile.id,
-          filename: sourceFile.filename,
+          fileId:
+            fileBatch.sourceFile?.id ??
+            fileBatch.sourceFiles.map((file) => file.id).join(','),
+          filename:
+            fileBatch.sourceFile?.filename ??
+            fileBatch.sourceFiles.map((file) => file.filename).join(', '),
           connector: connectorName,
           error: message,
         })

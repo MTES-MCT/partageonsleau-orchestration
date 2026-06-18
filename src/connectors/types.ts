@@ -29,6 +29,13 @@ export type ConnectorRunContext = {
   rate: number
   mostRecentAvailableDate: Date | undefined
   sourceFile?: string
+  sourceFiles?: ConnectorSourceFile[]
+}
+
+export type ConnectorSourceFile = {
+  type: string
+  filename: string
+  path: string
 }
 
 export type TimeserieValue = {
@@ -39,6 +46,7 @@ export type TimeserieValue = {
 export enum MetricType {
   INDEX = 'index',
   VOLUME_PRELEVE = 'volume_preleve',
+  VOLUME_REJETE = 'volume_rejete',
 }
 
 export enum MetricUnit {

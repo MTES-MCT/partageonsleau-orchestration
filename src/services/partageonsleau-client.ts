@@ -287,6 +287,12 @@ const metricBucketAggregators: Record<MetricType, BucketAggregator> = {
       value: existing.value + candidate.value,
     }
   },
+  [MetricType.VOLUME_REJETE](existing, candidate) {
+    return {
+      date: existing.date,
+      value: existing.value + candidate.value,
+    }
+  },
   [MetricType.INDEX](_existing, candidate) {
     // Un index est un état instantané: on conserve la dernière valeur observée du bucket.
     return candidate
