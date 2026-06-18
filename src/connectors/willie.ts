@@ -49,7 +49,7 @@ const willieResolutionByGranularity = {
   [Granularity.MONTH]: 'month',
   [Granularity.YEAR]: 'year',
 } as const satisfies Record<
-  Exclude<Granularity, Granularity.FIFTEEN_MINUTES>,
+  Exclude<Granularity, Granularity.FIFTEEN_MINUTES | Granularity.QUARTER>,
   string
 >
 
@@ -88,9 +88,12 @@ function isWillieRawConsumptionResponse(
 }
 
 function granularityToWillieResolution(granularity: Granularity): string {
-  if (granularity === Granularity.FIFTEEN_MINUTES) {
+  if (
+    granularity === Granularity.FIFTEEN_MINUTES ||
+    granularity === Granularity.QUARTER
+  ) {
     throw new Error(
-      '[WillieConnector] Granularity "15_minutes" is not supported by Willie API.',
+      `[WillieConnector] Granularity "${granularity}" is not supported by Willie API.`,
     )
   }
 

@@ -59,6 +59,7 @@ export enum Granularity {
   DAY = '1 day',
   WEEK = '1 week',
   MONTH = '1 month',
+  QUARTER = '1 quarter',
   YEAR = '1 year',
 }
 

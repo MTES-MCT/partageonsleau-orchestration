@@ -265,6 +265,14 @@ function alignDateToGranularity(date: Date, granularity: Granularity): Date {
       return aligned
     }
 
+    case Granularity.QUARTER: {
+      const quarterStartMonth = Math.floor(aligned.getUTCMonth() / 3) * 3
+      aligned.setUTCMonth(quarterStartMonth, 1)
+      aligned.setUTCHours(0, 0, 0, 0)
+
+      return aligned
+    }
+
     case Granularity.YEAR: {
       aligned.setUTCMonth(0, 1)
       aligned.setUTCHours(0, 0, 0, 0)
@@ -411,6 +419,10 @@ function serializePayloadDataForPost(
 
       case Granularity.MONTH: {
         return '1 month'
+      }
+
+      case Granularity.QUARTER: {
+        return '1 quarter'
       }
 
       case Granularity.YEAR: {
