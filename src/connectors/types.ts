@@ -29,6 +29,13 @@ export type ConnectorRunContext = {
   rate: number
   mostRecentAvailableDate: Date | undefined
   sourceFile?: string
+  sourceFiles?: ConnectorSourceFile[]
+}
+
+export type ConnectorSourceFile = {
+  type: string
+  filename: string
+  path: string
 }
 
 export type TimeserieValue = {
@@ -39,6 +46,7 @@ export type TimeserieValue = {
 export enum MetricType {
   INDEX = 'index',
   VOLUME_PRELEVE = 'volume_preleve',
+  VOLUME_REJETE = 'volume_rejete',
 }
 
 export enum MetricUnit {
@@ -51,6 +59,7 @@ export enum Granularity {
   DAY = '1 day',
   WEEK = '1 week',
   MONTH = '1 month',
+  QUARTER = '1 quarter',
   YEAR = '1 year',
 }
 
@@ -60,6 +69,26 @@ export enum SourceType {
   API = 'API',
 }
 
+export type UsageEau =
+  | 'INCONNU'
+  | 'PAS_D_USAGE'
+  | 'IRRIGATION'
+  | 'AGRICULTURE_ELEVAGE'
+  | 'AQUACULTURE'
+  | 'INDUSTRIE'
+  | 'AEP'
+  | 'ENERGIE'
+  | 'LOISIRS'
+  | 'EMBOUTEILLAGE'
+  | 'THERMALISME_THALASSO'
+  | 'DEFENSE_INCENDIE'
+  | 'REALIMENTATION_EAU'
+  | 'CANAUX'
+  | 'ETIAGE'
+  | 'ENTRETIEN_VOIRIES'
+  | 'ALIMENTATION_SOUTIEN_CANAL'
+  | 'DOMESTIQUE'
+
 export enum ConflictPolicy {
   REPLACE_EXISTING = 'REPLACE_EXISTING',
   SKIP_NEW_CHUNK = 'SKIP_NEW_CHUNK',
@@ -67,6 +96,7 @@ export enum ConflictPolicy {
 
 export type Timeserie = {
   type: MetricType
+  usage?: UsageEau
   granularity: Granularity
   conflictPolicy: ConflictPolicy
   values: TimeserieValue[]
