@@ -8,6 +8,7 @@ import {
   MetricType,
   MetricUnit,
   SourceType,
+  type ConnectorDiscoveryContext,
   type ConnectorRunContext,
   type ConnectorSourceFile,
   type ParsedPointPayload,
@@ -479,7 +480,9 @@ function normalizeContextSourceFile(sourceFile: string): ConnectorSourceFile {
   }
 }
 
-function selectGidafFiles(context: ConnectorRunContext): GidafSelectedFiles {
+function selectGidafFiles(
+  context: ConnectorRunContext | ConnectorDiscoveryContext,
+): GidafSelectedFiles {
   const sourceFiles =
     context.sourceFiles ??
     (context.sourceFile ? [normalizeContextSourceFile(context.sourceFile)] : [])
@@ -695,6 +698,28 @@ export class GidafConnector extends BaseConnector<
 
   constructor() {
     super(CONNECTOR_NAME)
+  }
+
+  async discoverSourcePointIds(
+    context: ConnectorDiscoveryContext,
+  ): Promise<string[]> {
+    const files = selectGidafFiles(context)
+    const cadresSheet = readFirstWorksheet(files.cadres.path)
+    const prelevementsSheet = readFirstWorksheet(files.prelevements.path)
+
+    if (!cadresSheet || !prelevementsSheet) {
+      return []
+    }
+
+    const cadresRows = extractCadresRows(cadresSheet)
+    const records = extractPrelevementRows(prelevementsSheet, cadresRows)
+    const sourcePointIds = records.flatMap((record) => {
+      const sourcePointId = record.sourcePointId ?? record.pointSurveillance
+
+      return sourcePointId ? [sourcePointId] : []
+    })
+
+    return [...new Set(sourcePointIds)]
   }
 
   protected async fetch(

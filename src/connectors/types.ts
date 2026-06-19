@@ -32,6 +32,11 @@ export type ConnectorRunContext = {
   sourceFiles?: ConnectorSourceFile[]
 }
 
+export type ConnectorDiscoveryContext = {
+  sourceFile?: string
+  sourceFiles?: ConnectorSourceFile[]
+}
+
 export type ConnectorSourceFile = {
   type: string
   filename: string

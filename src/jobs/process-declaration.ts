@@ -344,6 +344,111 @@ function buildConnectorFileBatches(parameters: {
   }))
 }
 
+function normalizeSourcePointKey(value: string): string {
+  return value
+    .normalize('NFD')
+    .replaceAll(/[\u0300-\u036F]/gv, '')
+    .trim()
+    .replaceAll(/\s+/gv, ' ')
+    .toLowerCase()
+}
+
+function dedupeSourcePointIds(sourcePointIds: string[]): string[] {
+  const seen = new Set<string>()
+  const uniqueSourcePointIds: string[] = []
+
+  for (const sourcePointId of sourcePointIds) {
+    const normalizedSourcePointId = sourcePointId
+      .trim()
+      .replaceAll(/\s+/gv, ' ')
+    const key = normalizeSourcePointKey(normalizedSourcePointId)
+
+    if (!key || seen.has(key)) {
+      continue
+    }
+
+    seen.add(key)
+    uniqueSourcePointIds.push(normalizedSourcePointId)
+  }
+
+  return uniqueSourcePointIds
+}
+
+function getPointLookupKeys(parameters: {
+  connectorName: string
+  point: DeclarationPoint
+}): string[] {
+  const {connectorName, point} = parameters
+  const values = [
+    resolveSourcePointId({connectorName, point}),
+    point.name,
+    point.sourceId,
+    point.sourcePointId,
+  ]
+
+  return values
+    .filter(
+      (value): value is string =>
+        typeof value === 'string' && value.trim().length > 0,
+    )
+    .map((value) => normalizeSourcePointKey(value))
+}
+
+function buildDeclarationPointForDetectedSourceId(parameters: {
+  connectorName: string
+  declarationPoints: DeclarationPoint[]
+  sourcePointId: string
+}): DeclarationPoint {
+  const {connectorName, declarationPoints, sourcePointId} = parameters
+  const sourcePointKey = normalizeSourcePointKey(sourcePointId)
+
+  for (const point of declarationPoints) {
+    if (getPointLookupKeys({connectorName, point}).includes(sourcePointKey)) {
+      return {
+        ...point,
+        sourcePointId,
+      }
+    }
+  }
+
+  return {
+    pointId: `detected:${sourcePointId}`,
+    name: sourcePointId,
+    sourcePointId,
+  }
+}
+
+function buildPointsForDetectedSourceIds(parameters: {
+  connectorName: string
+  declarationPoints: DeclarationPoint[]
+  detectedSourcePointIds: string[]
+}): DeclarationPoint[] {
+  const {connectorName, declarationPoints, detectedSourcePointIds} = parameters
+  const uniqueSourcePointIds = dedupeSourcePointIds(detectedSourcePointIds)
+  const points: DeclarationPoint[] = []
+  const seenRunKeys = new Set<string>()
+
+  for (const sourcePointId of uniqueSourcePointIds) {
+    const point = buildDeclarationPointForDetectedSourceId({
+      connectorName,
+      declarationPoints,
+      sourcePointId,
+    })
+    const runKey = normalizeSourcePointKey(
+      resolveSourcePointId({connectorName, point}),
+    )
+
+    if (seenRunKeys.has(runKey)) {
+      continue
+    }
+
+    seenRunKeys.add(runKey)
+    points.push(point)
+  }
+
+  return points
+}
+
 function hasValues(output: ConnectorOutput): boolean {
   return output.data.metrics.some((metric) => metric.values.length > 0)
 }
@@ -609,7 +714,41 @@ async function runConnectorForDeclaration(parameters: {
   })
 
   for (const fileBatch of fileBatches) {
-    for (const point of declaration.points) {
+    let pointsToProcess = declaration.points
+
+    try {
+      const detectedSourcePointIds = await connector.discoverSourcePointIds({
+        sourceFile: fileBatch.sourceFile?.localPath,
+        sourceFiles: toConnectorSourceFiles(fileBatch.sourceFiles),
+      })
+
+      if (detectedSourcePointIds.length > 0) {
+        pointsToProcess = buildPointsForDetectedSourceIds({
+          connectorName,
+          declarationPoints: declaration.points,
+          detectedSourcePointIds,
+        })
+      }
+
+      console.log(
+        `[process-declaration] ${connectorName} detected source points=${detectedSourcePointIds.length}, processed points=${pointsToProcess.length}`,
+      )
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+
+      errors.push({
+        fileId:
+          fileBatch.sourceFile?.id ??
+          fileBatch.sourceFiles.map((file) => file.id).join(','),
+        filename:
+          fileBatch.sourceFile?.filename ??
+          fileBatch.sourceFiles.map((file) => file.filename).join(', '),
+        connector: connectorName,
+        error: message,
+      })
+    }
+
+    for (const point of pointsToProcess) {
       const sourcePointId = resolveSourcePointId({
         connectorName,
         point,
