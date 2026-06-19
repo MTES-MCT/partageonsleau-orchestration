@@ -5,6 +5,7 @@ import {TemplateFileConnector} from './template_file.js'
 import {GidafConnector} from './gidaf.js'
 import {type BaseConnector} from './base-connector.js'
 import {BvTechConnector} from './bv-tech.js'
+import {OmniscientMurgatConnector} from './omniscient_murgat.js'
 
 export const connectorRegistry = new Map<
   string,
@@ -16,4 +17,5 @@ export const connectorRegistry = new Map<
   ['aquasys', new AquasysConnector()],
   ['template_file', new TemplateFileConnector()],
   ['gidaf', new GidafConnector()],
+  ['omniscient_murgat', new OmniscientMurgatConnector()],
 ])
