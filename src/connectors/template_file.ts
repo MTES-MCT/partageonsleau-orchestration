@@ -10,6 +10,7 @@ import {
   SourceType,
   type ConnectorRunContext,
   type ParsedPointPayload,
+  type UsageEau,
 } from './types.js'
 import {BaseConnector} from './base-connector.js'
 
@@ -20,13 +21,13 @@ type TemplateFileRowInput = Record<string, unknown> & {
   date_fin?: string | number | Date
   volume_preleve_m3?: string | number
   volume_rejete_m3?: string | number
-  usage?: string
-  Usage?: string
+  usage?: string | number
 }
 
 type TemplateFileRawRow = {
   sourcePointId: string
   metricType: MetricType.VOLUME_PRELEVE
+  usage?: UsageEau
   dateStart: Date
   dateEnd: Date | undefined
   value: number
@@ -50,6 +51,34 @@ const ID_COLUMNS = [
 const DATE_START_COLUMN = 'date_debut'
 const DATE_END_COLUMN = 'date_fin'
 const VOLUME_COLUMN = 'volume_preleve_m3'
+const USAGE_COLUMN = 'usage'
+
+const USAGE_EAU_VALUES = [
+  'INCONNU',
+  'PAS_D_USAGE',
+  'IRRIGATION',
+  'AGRICULTURE_ELEVAGE',
+  'AQUACULTURE',
+  'INDUSTRIE',
+  'AEP',
+  'ENERGIE',
+  'LOISIRS',
+  'EMBOUTEILLAGE',
+  'THERMALISME_THALASSO',
+  'DEFENSE_INCENDIE',
+  'REALIMENTATION_EAU',
+  'CANAUX',
+  'ETIAGE',
+  'ENTRETIEN_VOIRIES',
+  'ALIMENTATION_SOUTIEN_CANAL',
+  'DOMESTIQUE',
+] as const satisfies readonly UsageEau[]
+
+const USAGE_EAU_VALUE_SET: ReadonlySet<string> = new Set(USAGE_EAU_VALUES)
+
+function isUsageEau(value: string): value is UsageEau {
+  return USAGE_EAU_VALUE_SET.has(value)
+}
 
 const DECLARATION_DATE_FORMATS = [
   'DD/MM/YYYY',
@@ -154,6 +183,20 @@ function parseDeclarationNumber(rawValue: unknown): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined
 }
 
+function parseTemplateUsage(rawUsage: unknown): UsageEau | undefined {
+  if (typeof rawUsage !== 'string' && typeof rawUsage !== 'number') {
+    return undefined
+  }
+
+  const usage = String(rawUsage).trim().toLocaleUpperCase('fr-FR')
+
+  if (!usage) {
+    return undefined
+  }
+
+  return isUsageEau(usage) ? usage : undefined
+}
+
 function parseTemplateVolumeRow(
   row: TemplateFileRowInput,
 ): TemplateFileRawRow | undefined {
@@ -161,6 +204,7 @@ function parseTemplateVolumeRow(
   const dateStart = parseDeclarationDate(row[DATE_START_COLUMN])
   const dateEnd = parseDeclarationDate(row[DATE_END_COLUMN])
   const volumeValue = parseDeclarationNumber(row[VOLUME_COLUMN])
+  const usage = parseTemplateUsage(row[USAGE_COLUMN])
 
   if (!sourcePointId || !dateStart || volumeValue === undefined) {
     return undefined
@@ -169,6 +213,7 @@ function parseTemplateVolumeRow(
   return {
     sourcePointId,
     metricType: MetricType.VOLUME_PRELEVE,
+    usage,
     dateStart,
     dateEnd,
     value: volumeValue,
@@ -287,29 +332,44 @@ export class TemplateFileConnector extends BaseConnector<
     parsedData: TemplateFileParsedResult,
     context: ConnectorRunContext,
   ): Promise<ParsedPointPayload> {
-    const byType = new Map<MetricType, Array<{date: Date; value: number}>>()
+    const byTypeAndUsage = new Map<
+      string,
+      {
+        type: MetricType
+        usage: UsageEau | undefined
+        values: Array<{date: Date; value: number}>
+      }
+    >()
 
     for (const record of parsedData.records) {
-      const values = byType.get(record.metricType) ?? []
+      const key = `${record.metricType}__${record.usage ?? 'NO_USAGE'}`
+      const group = byTypeAndUsage.get(key) ?? {
+        type: record.metricType,
+        usage: record.usage,
+        values: [],
+      }
 
-      values.push({
+      group.values.push({
         date: record.dateStart,
         value: record.value,
       })
 
-      byType.set(record.metricType, values)
+      byTypeAndUsage.set(key, group)
     }
 
-    const metrics = [...byType.entries()].map(([type, values]) => ({
-      type,
-      granularity: TemplateFileConnector.metric.granularity,
-      conflictPolicy: TemplateFileConnector.metric.conflictPolicy,
-      values: values.map((value) => ({
-        date: value.date,
-        value: value.value,
-      })),
-      unit: TemplateFileConnector.metric.unit,
-    }))
+    const metrics = [...byTypeAndUsage.values()].map(
+      ({type, usage, values}) => ({
+        type,
+        ...(usage ? {usage} : {}),
+        granularity: TemplateFileConnector.metric.granularity,
+        conflictPolicy: TemplateFileConnector.metric.conflictPolicy,
+        values: values.map((value) => ({
+          date: value.date,
+          value: value.value,
+        })),
+        unit: TemplateFileConnector.metric.unit,
+      }),
+    )
 
     const {minDate, maxDate} = this.getMinMaxDates(
       parsedData.records,
