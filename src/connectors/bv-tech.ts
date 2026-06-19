@@ -6,6 +6,7 @@ import {
   MetricType,
   MetricUnit,
   SourceType,
+  type ConnectorDiscoveryContext,
   type ConnectorRunContext,
   type ParsedPointPayload,
   type Timeserie,
@@ -750,6 +751,25 @@ export class BvTechConnector extends BaseConnector<
 > {
   constructor() {
     super(CONNECTOR_NAME)
+  }
+
+  async discoverSourcePointIds(
+    context: ConnectorDiscoveryContext,
+  ): Promise<string[]> {
+    if (!context.sourceFile) {
+      return []
+    }
+
+    const candidates = readWorksheetCandidates(context.sourceFile)
+    const sourcePointIds = candidates.flatMap((candidate) =>
+      candidate.pointColumns.flatMap((pointColumns) =>
+        pointColumns.pointIdentifiers[0]
+          ? [pointColumns.pointIdentifiers[0]]
+          : [],
+      ),
+    )
+
+    return [...new Set(sourcePointIds)]
   }
 
   protected async fetch(

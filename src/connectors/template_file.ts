@@ -8,6 +8,7 @@ import {
   MetricType,
   MetricUnit,
   SourceType,
+  type ConnectorDiscoveryContext,
   type ConnectorRunContext,
   type ParsedPointPayload,
   type UsageEau,
@@ -261,6 +262,26 @@ export class TemplateFileConnector extends BaseConnector<
 
   constructor() {
     super('template_file')
+  }
+
+  async discoverSourcePointIds(
+    context: ConnectorDiscoveryContext,
+  ): Promise<string[]> {
+    if (!context.sourceFile) {
+      return []
+    }
+
+    const rows = await readRowsFromWorkbook(
+      context.sourceFile,
+      TEMPLATE_SHEET_NAME,
+    )
+    const sourcePointIds = rows.flatMap((row) => {
+      const sourcePointId = getSourcePointId(row)
+
+      return sourcePointId ? [sourcePointId] : []
+    })
+
+    return [...new Set(sourcePointIds)]
   }
 
   protected async fetch(

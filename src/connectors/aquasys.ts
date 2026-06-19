@@ -7,6 +7,7 @@ import {
   MetricType,
   MetricUnit,
   SourceType,
+  type ConnectorDiscoveryContext,
   type ConnectorRunContext,
   type ParsedPointPayload,
 } from './types.js'
@@ -348,6 +349,26 @@ export class AquasysConnector extends BaseConnector<
 
   constructor() {
     super('aquasys')
+  }
+
+  async discoverSourcePointIds(
+    context: ConnectorDiscoveryContext,
+  ): Promise<string[]> {
+    if (!context.sourceFile) {
+      return []
+    }
+
+    const rows = await readRowsFromWorkbook<AquasysRowInput>(
+      context.sourceFile,
+      'Export',
+    )
+    const sourcePointIds = rows.flatMap((row) => {
+      const sourcePointId = parseAquasysWorkbookRow(row)?.sourcePointId
+
+      return sourcePointId ? [sourcePointId] : []
+    })
+
+    return [...new Set(sourcePointIds)]
   }
 
   protected async fetch(

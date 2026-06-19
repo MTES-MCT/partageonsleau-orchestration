@@ -1,4 +1,5 @@
 import type {
+  ConnectorDiscoveryContext,
   ConnectorRunContext,
   ConnectorOutput,
   ParsedPointPayload,
@@ -24,6 +25,12 @@ export abstract class BaseConnector<TRawData, TParsedData> {
       lastRunAt: new Date(),
       data: parsedData,
     }
+  }
+
+  async discoverSourcePointIds(
+    _context: ConnectorDiscoveryContext,
+  ): Promise<string[]> {
+    return []
   }
 
   protected getMinMaxDates<T>(
