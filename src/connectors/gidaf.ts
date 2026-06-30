@@ -41,6 +41,12 @@ type GidafCadreRow = {
 }
 
 type GidafMetricType = MetricType.VOLUME_PRELEVE | MetricType.VOLUME_REJETE
+type GidafPointFlowType = 'prelevement' | 'rejet'
+
+type GidafCadresLookup = {
+  byCodeAndPointSurveillance: Map<string, GidafCadreRow>
+  byPointSurveillance: Map<string, GidafCadreRow>
+}
 
 type GidafRawRow = {
   sourcePointId: string | undefined
@@ -308,8 +314,28 @@ function startOfMonth(date: Date): Date {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1))
 }
 
+function getPointFlowType(
+  typePoint: string | undefined,
+): GidafPointFlowType | undefined {
+  const normalized = stripDiacritics(typePoint).toLowerCase()
+
+  if (normalized.includes('rejet')) {
+    return 'rejet'
+  }
+
+  if (
+    normalized.includes('alimentation') ||
+    normalized.includes('prelevement') ||
+    normalized.includes('prelevements')
+  ) {
+    return 'prelevement'
+  }
+
+  return undefined
+}
+
 function isPrelevementType(typePoint: string | undefined): boolean {
-  return stripDiacritics(typePoint).toLowerCase().includes('alimentation')
+  return getPointFlowType(typePoint) !== 'rejet'
 }
 
 function buildGidafPointSourceId(parameters: {
@@ -562,20 +588,63 @@ function extractCadresRows(sheet: WorkSheet): GidafCadreRow[] {
   return rows
 }
 
-function buildCadresByPointSurveillance(
-  cadresRows: GidafCadreRow[],
-): Map<string, GidafCadreRow> {
-  const cadresByPointSurveillance = new Map<string, GidafCadreRow>()
+function buildCadreCodeAndPointKey(parameters: {
+  codeInspection: string | undefined
+  pointSurveillance: string | undefined
+}): string | undefined {
+  const {codeInspection, pointSurveillance} = parameters
+
+  if (!codeInspection || !pointSurveillance) {
+    return undefined
+  }
+
+  return `${normalizeIdentifier(codeInspection)}::${normalizeIdentifier(pointSurveillance)}`
+}
+
+function buildCadresLookup(cadresRows: GidafCadreRow[]): GidafCadresLookup {
+  const byCodeAndPointSurveillance = new Map<string, GidafCadreRow>()
+  const byPointSurveillance = new Map<string, GidafCadreRow>()
 
   for (const row of cadresRows) {
-    const key = normalizeIdentifier(row.pointSurveillance)
+    const pointKey = normalizeIdentifier(row.pointSurveillance)
 
-    if (!cadresByPointSurveillance.has(key)) {
-      cadresByPointSurveillance.set(key, row)
+    if (!byPointSurveillance.has(pointKey)) {
+      byPointSurveillance.set(pointKey, row)
+    }
+
+    const codeAndPointKey = buildCadreCodeAndPointKey({
+      codeInspection: row.codeInspection,
+      pointSurveillance: row.pointSurveillance,
+    })
+
+    if (codeAndPointKey && !byCodeAndPointSurveillance.has(codeAndPointKey)) {
+      byCodeAndPointSurveillance.set(codeAndPointKey, row)
     }
   }
 
-  return cadresByPointSurveillance
+  return {byCodeAndPointSurveillance, byPointSurveillance}
+}
+
+function findCadreRow(
+  cadresLookup: GidafCadresLookup,
+  parameters: {
+    codeInspection: string | undefined
+    pointSurveillance: string
+  },
+): GidafCadreRow | undefined {
+  const codeAndPointKey = buildCadreCodeAndPointKey(parameters)
+
+  if (codeAndPointKey) {
+    const row = cadresLookup.byCodeAndPointSurveillance.get(codeAndPointKey)
+
+    if (row) {
+      return row
+    }
+  }
+
+  return cadresLookup.byPointSurveillance.get(
+    normalizeIdentifier(parameters.pointSurveillance),
+  )
 }
 
 function extractPrelevementRows(
@@ -590,7 +659,7 @@ function extractPrelevementRows(
   }
 
   const columnMap = mapColumns(sheet, headerRow, PRELEVEMENTS_COLUMNS)
-  const cadresByPointSurveillance = buildCadresByPointSurveillance(cadresRows)
+  const cadresLookup = buildCadresLookup(cadresRows)
   const rows: GidafRawRow[] = []
 
   for (let rowIndex = headerRow + 1; rowIndex <= range.e.r; rowIndex += 1) {
@@ -607,12 +676,17 @@ function extractPrelevementRows(
       continue
     }
 
-    const cadre = cadresByPointSurveillance.get(
-      normalizeIdentifier(pointSurveillance),
+    const prelevementCodeInspection = readMappedString(
+      sheet,
+      rowIndex,
+      columnMap,
+      'codeInspection',
     )
-    const codeInspection =
-      readMappedString(sheet, rowIndex, columnMap, 'codeInspection') ??
-      cadre?.codeInspection
+    const cadre = findCadreRow(cadresLookup, {
+      codeInspection: prelevementCodeInspection,
+      pointSurveillance,
+    })
+    const codeInspection = prelevementCodeInspection ?? cadre?.codeInspection
     const typePoint =
       readMappedString(sheet, rowIndex, columnMap, 'typePoint') ??
       cadre?.typePoint
@@ -643,24 +717,12 @@ function rowMatchesSourcePointId(
   sourcePointId: string,
 ): boolean {
   const normalizedSourcePointId = normalizeIdentifier(sourcePointId)
-  const candidates = [row.sourcePointId, row.pointSurveillance]
 
-  return candidates.some((candidate) => {
-    if (!candidate) {
-      return false
-    }
+  if (row.sourcePointId) {
+    return normalizeIdentifier(row.sourcePointId) === normalizedSourcePointId
+  }
 
-    const normalizedCandidate = normalizeIdentifier(candidate)
-
-    if (normalizedCandidate === normalizedSourcePointId) {
-      return true
-    }
-
-    return (
-      normalizedCandidate.length >= 4 &&
-      normalizedSourcePointId.includes(normalizedCandidate)
-    )
-  })
+  return normalizeIdentifier(row.pointSurveillance) === normalizedSourcePointId
 }
 
 function getDateBounds(records: GidafRawRow[]): {
@@ -808,7 +870,7 @@ export class GidafConnector extends BaseConnector<
     return [...valuesByType.entries()].map(([type, valuesByDate]) => ({
       type,
       granularity: Granularity.MONTH,
-      conflictPolicy: ConflictPolicy.SKIP_NEW_CHUNK,
+      conflictPolicy: ConflictPolicy.REPLACE_EXISTING,
       values: sortValuesByDate([...valuesByDate.values()]),
       unit: MetricUnit.M3,
     }))

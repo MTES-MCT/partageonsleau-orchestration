@@ -12,7 +12,7 @@ import {
   MetricType,
   type ParsedPointPayload,
   type Timeserie,
-  type UsageEau,
+  type WaterUseCode,
 } from '../connectors/types.js'
 
 type DeclarationFile = {
@@ -56,7 +56,7 @@ type LegacySeriesValue = {
 
 type LegacySeries = {
   pointPrelevement: string
-  usage?: UsageEau
+  usage?: WaterUseCode
   parameter: string
   unit: string | undefined
   frequency: string
@@ -493,6 +493,7 @@ function metricToLegacySeries(parameters: {
 }
 
 function connectorOutputsToLegacyPayload(parameters: {
+  connectorName: string
   outputs: Array<{
     point: DeclarationPoint
     output: ConnectorOutput
@@ -500,6 +501,7 @@ function connectorOutputsToLegacyPayload(parameters: {
 }): LegacyIngestionPayload {
   const series: LegacySeries[] = []
   let hasOnlyPunctualMetrics = parameters.outputs.length > 0
+  const configuredConflictPolicies = new Set<ConflictPolicy>()
 
   for (const {point, output} of parameters.outputs) {
     if (
@@ -512,6 +514,8 @@ function connectorOutputsToLegacyPayload(parameters: {
     }
 
     for (const metric of output.data.metrics) {
+      configuredConflictPolicies.add(metric.conflictPolicy)
+
       const legacySeries = metricToLegacySeries({
         point,
         metric,
@@ -528,6 +532,13 @@ function connectorOutputsToLegacyPayload(parameters: {
     (item) =>
       item.parameter === metricTypeToLegacyParameter(MetricType.VOLUME_PRELEVE),
   )
+
+  if (configuredConflictPolicies.size === 1) {
+    return {
+      conflictPolicy: [...configuredConflictPolicies][0],
+      series,
+    }
+  }
 
   return {
     conflictPolicy: hasOnlyPunctualMetrics
@@ -796,6 +807,7 @@ async function runConnectorForDeclaration(parameters: {
   }
 
   const data = connectorOutputsToLegacyPayload({
+    connectorName,
     outputs,
   })
 
