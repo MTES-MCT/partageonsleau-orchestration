@@ -11,7 +11,7 @@ import {
   type ConnectorDiscoveryContext,
   type ConnectorRunContext,
   type ParsedPointPayload,
-  type UsageEau,
+  type WaterUseCode,
 } from './types.js'
 import {BaseConnector} from './base-connector.js'
 
@@ -28,7 +28,7 @@ type TemplateFileRowInput = Record<string, unknown> & {
 type TemplateFileRawRow = {
   sourcePointId: string
   metricType: MetricType.VOLUME_PRELEVE
-  usage?: UsageEau
+  usage?: WaterUseCode
   dateStart: Date
   dateEnd: Date | undefined
   value: number
@@ -54,31 +54,85 @@ const DATE_END_COLUMN = 'date_fin'
 const VOLUME_COLUMN = 'volume_preleve_m3'
 const USAGE_COLUMN = 'usage'
 
-const USAGE_EAU_VALUES = [
-  'INCONNU',
-  'PAS_D_USAGE',
-  'IRRIGATION',
-  'AGRICULTURE_ELEVAGE',
-  'AQUACULTURE',
-  'INDUSTRIE',
-  'AEP',
-  'ENERGIE',
-  'LOISIRS',
-  'EMBOUTEILLAGE',
-  'THERMALISME_THALASSO',
-  'DEFENSE_INCENDIE',
-  'REALIMENTATION_EAU',
-  'CANAUX',
-  'ETIAGE',
-  'ENTRETIEN_VOIRIES',
-  'ALIMENTATION_SOUTIEN_CANAL',
-  'DOMESTIQUE',
-] as const satisfies readonly UsageEau[]
+const SANDRE_WATER_USE_CODES = [
+  '0',
+  '1',
+  '2',
+  '2A',
+  '2B',
+  '2C',
+  '2D',
+  '2E',
+  '2F',
+  '3',
+  '3A',
+  '3B',
+  '4',
+  '4A',
+  '4B',
+  '4C',
+  '4D',
+  '5',
+  '5A',
+  '5B',
+  '6',
+  '6A',
+  '6B',
+  '6C',
+  '6C1',
+  '6C2',
+  '6C3',
+  '6D',
+  '7',
+  '7A',
+  '7B',
+  '7C',
+  '7D',
+  '7E',
+  '8',
+  '9',
+  '9A',
+  '9B',
+  '10',
+  '11',
+  '12',
+  '12A',
+  '12B',
+  '12C',
+  '12D',
+  '12E',
+  '13',
+  '13A',
+  '13B',
+  '14',
+  '15',
+  '16',
+  '17',
+] as const
 
-const USAGE_EAU_VALUE_SET: ReadonlySet<string> = new Set(USAGE_EAU_VALUES)
+const SANDRE_WATER_USE_CODE_SET: ReadonlySet<string> = new Set(
+  SANDRE_WATER_USE_CODES,
+)
 
-function isUsageEau(value: string): value is UsageEau {
-  return USAGE_EAU_VALUE_SET.has(value)
+const LEGACY_USAGE_TO_SANDRE_CODE: Readonly<Record<string, WaterUseCode>> = {
+  INCONNU: '0',
+  PAS_D_USAGE: '1',
+  IRRIGATION: '2',
+  AGRICULTURE_ELEVAGE: '3',
+  AQUACULTURE: '3B',
+  INDUSTRIE: '4',
+  AEP: '5',
+  ENERGIE: '6',
+  LOISIRS: '7',
+  EMBOUTEILLAGE: '8',
+  THERMALISME_THALASSO: '9',
+  DEFENSE_INCENDIE: '10',
+  REALIMENTATION_EAU: '12',
+  CANAUX: '13',
+  ETIAGE: '14',
+  ENTRETIEN_VOIRIES: '15',
+  ALIMENTATION_SOUTIEN_CANAL: '16',
+  DOMESTIQUE: '17',
 }
 
 const DECLARATION_DATE_FORMATS = [
@@ -184,7 +238,7 @@ function parseDeclarationNumber(rawValue: unknown): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined
 }
 
-function parseTemplateUsage(rawUsage: unknown): UsageEau | undefined {
+function parseTemplateUsageCode(rawUsage: unknown): WaterUseCode | undefined {
   if (typeof rawUsage !== 'string' && typeof rawUsage !== 'number') {
     return undefined
   }
@@ -195,7 +249,11 @@ function parseTemplateUsage(rawUsage: unknown): UsageEau | undefined {
     return undefined
   }
 
-  return isUsageEau(usage) ? usage : undefined
+  if (SANDRE_WATER_USE_CODE_SET.has(usage)) {
+    return usage
+  }
+
+  return LEGACY_USAGE_TO_SANDRE_CODE[usage]
 }
 
 function parseTemplateVolumeRow(
@@ -205,7 +263,7 @@ function parseTemplateVolumeRow(
   const dateStart = parseDeclarationDate(row[DATE_START_COLUMN])
   const dateEnd = parseDeclarationDate(row[DATE_END_COLUMN])
   const volumeValue = parseDeclarationNumber(row[VOLUME_COLUMN])
-  const usage = parseTemplateUsage(row[USAGE_COLUMN])
+  const usage = parseTemplateUsageCode(row[USAGE_COLUMN])
 
   if (!sourcePointId || !dateStart || volumeValue === undefined) {
     return undefined
@@ -357,7 +415,7 @@ export class TemplateFileConnector extends BaseConnector<
       string,
       {
         type: MetricType
-        usage: UsageEau | undefined
+        usage: WaterUseCode | undefined
         values: Array<{date: Date; value: number}>
       }
     >()
