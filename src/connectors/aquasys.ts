@@ -62,6 +62,11 @@ type AquasysRowInput = {
   Compteur: string | undefined
 }
 
+type AquasysWorkbookReadResult = {
+  workbook: XLSX.WorkBook
+  fallbackToFirstSheet: boolean
+}
+
 const AQUASYS_POINT_COLUMN = 'Point de prélèvement'
 const AQUASYS_METRIC_COLUMN = 'Index ou volume'
 const AQUASYS_DATE_COLUMN = 'Date de mesure'
@@ -69,6 +74,11 @@ const AQUASYS_DATE_END_COLUMN = 'Date de fin'
 const AQUASYS_VALUE_COLUMN = 'Mesure'
 const AQUASYS_READING_COEFFICIENT_COLUMN = 'Coefficient de lecture'
 const AQUASYS_METER_COLUMN = 'Compteur'
+const AQUASYS_REQUIRED_COLUMNS = [
+  AQUASYS_POINT_COLUMN,
+  AQUASYS_DATE_COLUMN,
+  AQUASYS_VALUE_COLUMN,
+]
 
 function parseAquasysMetricType(rawMetric: string): MetricType {
   const normalized = String(rawMetric).trim().toLowerCase()
@@ -150,6 +160,43 @@ function parseAquasysNumber(rawValue: string | number): number | undefined {
   }
 
   return parsed
+}
+
+function normalizeAquasysHeader(value: string): string {
+  return value
+    .normalize('NFD')
+    .replaceAll(/[\u0300-\u036F]/gv, '')
+    .toLowerCase()
+    .trim()
+    .replaceAll(/\s+/gv, '_')
+    .replaceAll(/_+/gv, '_')
+}
+
+function decodeUtf8(buffer: Uint8Array): string {
+  return new TextDecoder().decode(buffer)
+}
+
+function isLikelyAquasysCsv(buffer: Uint8Array): boolean {
+  const sample = decodeUtf8(buffer.subarray(0, Math.min(buffer.length, 16_384)))
+  const headerLine = sample.split(/\r?\n/v).find((line) => line.trim())
+
+  if (!headerLine?.includes(';')) {
+    return false
+  }
+
+  const headers = headerLine
+    .split(';')
+    .map((header) => normalizeAquasysHeader(header))
+
+  return AQUASYS_REQUIRED_COLUMNS.every((columnName) => {
+    const normalizedColumnName = normalizeAquasysHeader(columnName)
+
+    return headers.some(
+      (header) =>
+        header === normalizedColumnName ||
+        header.includes(normalizedColumnName),
+    )
+  })
 }
 
 function toDateKey(date: Date): string {
@@ -311,15 +358,41 @@ function consolidatePointVolumes(
   }
 }
 
+function readAquasysWorkbook(buffer: Uint8Array): AquasysWorkbookReadResult {
+  if (isLikelyAquasysCsv(buffer)) {
+    return {
+      workbook: XLSX.read(decodeUtf8(buffer), {
+        type: 'string',
+        raw: true,
+        FS: ';',
+      }),
+      fallbackToFirstSheet: true,
+    }
+  }
+
+  return {
+    workbook: XLSX.read(buffer, {type: 'buffer'}),
+    fallbackToFirstSheet: false,
+  }
+}
+
 async function readRowsFromWorkbook<TInput extends Record<string, unknown>>(
   filePath: string,
   sheetName?: string,
 ): Promise<TInput[]> {
   const absolutePath = path.resolve(filePath)
   const buffer = await fs.readFile(absolutePath)
-  const workbook = XLSX.read(buffer, {type: 'buffer'})
+  const {workbook, fallbackToFirstSheet} = readAquasysWorkbook(buffer)
 
-  const resolvedSheetName = sheetName ?? workbook.SheetNames[0]
+  let resolvedSheetName: string | undefined
+  if (!sheetName) {
+    resolvedSheetName = workbook.SheetNames[0]
+  } else if (workbook.Sheets[sheetName]) {
+    resolvedSheetName = sheetName
+  } else if (fallbackToFirstSheet) {
+    resolvedSheetName = workbook.SheetNames[0]
+  }
+
   if (!resolvedSheetName) {
     return []
   }
