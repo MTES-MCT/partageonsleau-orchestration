@@ -1,3 +1,4 @@
+import {Job} from 'bullmq'
 import {getQueue} from './config.js'
 
 const PULL_UPDATED_DATA_JOB_NAME = 'pull-updated-data'
@@ -34,6 +35,12 @@ export async function addJobProcessDeclaration(parameters: {
   declarationId: string
 }) {
   const queue = getQueue(PROCESS_DECLARATION_JOB_NAME)
+  const jobId = `declaration-${parameters.declarationId}`
+  const existingJob = await Job.fromId(queue, jobId)
+
+  if (existingJob && (await existingJob.getState()) === 'failed') {
+    await existingJob.remove()
+  }
 
   return queue.add(
     PROCESS_DECLARATION_JOB_NAME,
@@ -41,7 +48,7 @@ export async function addJobProcessDeclaration(parameters: {
       declarationId: parameters.declarationId,
     },
     {
-      jobId: `declaration-${parameters.declarationId}`,
+      jobId,
       removeOnComplete: true,
       removeOnFail: false,
       attempts: 3,
