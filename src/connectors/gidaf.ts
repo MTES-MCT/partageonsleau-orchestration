@@ -27,11 +27,7 @@ type ColumnDefinition<TKey extends string> = {
 type CadresColumnKey = 'codeInspection' | 'pointSurveillance' | 'typePoint'
 
 type PrelevementsColumnKey =
-  | 'codeInspection'
-  | 'pointSurveillance'
-  | 'typePoint'
-  | 'dateMesure'
-  | 'volume'
+  'codeInspection' | 'pointSurveillance' | 'typePoint' | 'dateMesure' | 'volume'
 
 type GidafCadreRow = {
   codeInspection: string | undefined
