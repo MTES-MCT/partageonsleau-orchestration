@@ -1,4 +1,4 @@
-FROM node:24.15.0-bookworm-slim AS builder
+FROM node:24-bookworm-slim AS builder
 
 WORKDIR /app
 
@@ -12,7 +12,7 @@ COPY src ./src
 RUN npm run build
 RUN npm prune --omit=dev
 
-FROM node:24.15.0-bookworm-slim
+FROM node:24-bookworm-slim
 
 WORKDIR /app
 
