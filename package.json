@@ -12,7 +12,7 @@
     "lint": "xo",
     "lint:fix": "xo --fix",
     "start": "node dist/index.js",
-    "dev": "node --env-file=.env --import tsx index.ts",
+    "dev": "node --env-file=.env --watch --import tsx index.ts",
     "test": "xo"
   },
   "engines": {
