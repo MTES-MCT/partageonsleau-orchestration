@@ -179,6 +179,10 @@ function toIsoDate(date: Date): string {
   return date.toISOString().slice(0, 10)
 }
 
+function toLegacyValueDate(date: Date, granularity: Granularity): string {
+  return granularity === Granularity.DAY ? toIsoDate(date) : date.toISOString()
+}
+
 function metricTypeToLegacyParameter(metricType: MetricType): string {
   switch (metricType) {
     case MetricType.VOLUME_PRELEVE: {
@@ -453,7 +457,7 @@ function metricToLegacySeries(parameters: {
   const values = metric.values
     .filter((value) => Number.isFinite(value.value))
     .map((value) => ({
-      date: toIsoDate(value.date),
+      date: toLegacyValueDate(value.date, metric.granularity),
       value: value.value,
     }))
 
