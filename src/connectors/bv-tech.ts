@@ -23,6 +23,9 @@ const FIRST_MEASURE_COLUMN_INDEX = 1
 const DEFAULT_DEBIT_INTERVAL_MINUTES = 5
 const MAX_AUTOMATIC_DEBIT_INTERVAL_MINUTES = 60
 const MILLISECONDS_PER_HOUR = 60 * 60 * 1000
+const MILLISECONDS_PER_FIFTEEN_MINUTES = 15 * 60 * 1000
+const LITERS_PER_CUBIC_METER = 1000
+const SECONDS_PER_HOUR = 60 * 60
 
 type BvTechPointColumns = {
   sheetName: string
@@ -578,6 +581,55 @@ function isHourlyDebitUnit(unit: string | undefined): boolean {
   )
 }
 
+function normalizeDebitValueToLitersPerSecond(
+  value: number,
+  unit: string | undefined,
+): number | undefined {
+  if (!unit) {
+    return undefined
+  }
+
+  const normalizedUnit = normalizeText(unit).replaceAll(/\s+/gv, '')
+
+  if (
+    normalizedUnit.includes('m3/h') ||
+    normalizedUnit.includes('m³/h') ||
+    normalizedUnit.includes('m3h-1') ||
+    normalizedUnit.includes('m³h-1')
+  ) {
+    return (value * LITERS_PER_CUBIC_METER) / SECONDS_PER_HOUR
+  }
+
+  if (
+    normalizedUnit.includes('l/h') ||
+    normalizedUnit.includes('lh-1') ||
+    normalizedUnit.includes('litre/h') ||
+    normalizedUnit.includes('litres/h')
+  ) {
+    return value / SECONDS_PER_HOUR
+  }
+
+  if (
+    normalizedUnit.includes('l/s') ||
+    normalizedUnit.includes('ls-1') ||
+    normalizedUnit.includes('litre/s') ||
+    normalizedUnit.includes('litres/s')
+  ) {
+    return value
+  }
+
+  return isHourlyDebitUnit(unit)
+    ? (value * LITERS_PER_CUBIC_METER) / SECONDS_PER_HOUR
+    : undefined
+}
+
+function startOfUtcFifteenMinute(date: Date): Date {
+  return new Date(
+    Math.floor(date.getTime() / MILLISECONDS_PER_FIFTEEN_MINUTES) *
+      MILLISECONDS_PER_FIFTEEN_MINUTES,
+  )
+}
+
 function getMedianDebitIntervalMilliseconds(samples: DebitSample[]): number {
   const maxIntervalMilliseconds =
     MAX_AUTOMATIC_DEBIT_INTERVAL_MINUTES * 60 * 1000
@@ -660,6 +712,54 @@ function buildDailyVolumeValuesFromDebit(
   )
 }
 
+function buildDebitValues(
+  rows: unknown[][],
+  pointColumns: BvTechPointColumns,
+): TimeserieValue[] {
+  if (pointColumns.debitColumn === undefined) {
+    return []
+  }
+
+  const samples = getDebitSamples(rows, pointColumns)
+
+  if (samples.length === 0) {
+    return []
+  }
+
+  const buckets = new Map<number, {sum: number; count: number}>()
+
+  for (const sample of samples) {
+    const value = normalizeDebitValueToLitersPerSecond(
+      sample.value,
+      pointColumns.debitUnit,
+    )
+
+    if (value === undefined) {
+      continue
+    }
+
+    const bucket = startOfUtcFifteenMinute(sample.date)
+    const bucketKey = bucket.getTime()
+    const aggregate = buckets.get(bucketKey) ?? {sum: 0, count: 0}
+    aggregate.sum += value
+    aggregate.count += 1
+    buckets.set(bucketKey, aggregate)
+  }
+
+  return sortValuesByDate(
+    [...buckets.entries()].flatMap(([bucketKey, aggregate]) =>
+      aggregate.count > 0
+        ? [
+            {
+              date: new Date(bucketKey),
+              value: aggregate.sum / aggregate.count,
+            },
+          ]
+        : [],
+    ),
+  )
+}
+
 function filterValuesAfterMostRecentAvailableDate(
   values: TimeserieValue[],
   mostRecentAvailableDate: Date | undefined,
@@ -683,6 +783,10 @@ function buildParsedPayload(parameters: {
     rows,
     pointColumns,
   )
+  const debitValues = filterValuesAfterMostRecentAvailableDate(
+    buildDebitValues(rows, pointColumns),
+    context.mostRecentAvailableDate,
+  )
   const volumeValues =
     declaredDailyVolumeValues.length > 0
       ? declaredDailyVolumeValues
@@ -696,9 +800,20 @@ function buildParsedPayload(parameters: {
   const metric: Timeserie = {
     type: MetricType.VOLUME_PRELEVE,
     granularity: Granularity.DAY,
-    conflictPolicy: ConflictPolicy.SKIP_NEW_CHUNK,
+    conflictPolicy: ConflictPolicy.REPLACE_EXISTING,
     values,
     unit: MetricUnit.M3,
+  }
+  const metrics: Timeserie[] = [metric]
+
+  if (debitValues.length > 0) {
+    metrics.push({
+      type: MetricType.DEBIT_PRELEVE,
+      granularity: Granularity.FIFTEEN_MINUTES,
+      conflictPolicy: ConflictPolicy.REPLACE_EXISTING,
+      values: debitValues,
+      unit: MetricUnit.L_S,
+    })
   }
 
   const payload: ParsedPointPayload = {
@@ -729,7 +844,7 @@ function buildParsedPayload(parameters: {
       dailyVolumeTimestampPolicy:
         'La valeur horodatée à J 00:00 est rattachée à la journée J-1.',
     },
-    metrics: [metric],
+    metrics,
     min_date: undefined,
     max_date: undefined,
   } satisfies ParsedPointPayload

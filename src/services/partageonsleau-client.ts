@@ -301,6 +301,10 @@ const metricBucketAggregators: Record<MetricType, BucketAggregator> = {
       value: existing.value + candidate.value,
     }
   },
+  [MetricType.DEBIT_PRELEVE](_existing, candidate) {
+    // Un débit est instantané : on conserve la dernière valeur observée du bucket.
+    return candidate
+  },
   [MetricType.INDEX](_existing, candidate) {
     // Un index est un état instantané: on conserve la dernière valeur observée du bucket.
     return candidate

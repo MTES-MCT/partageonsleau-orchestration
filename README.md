@@ -68,7 +68,7 @@ Copier `.env.example` vers `.env` et renseigner les variables.
 
 ## Scripts
 
-- `npm run dev` — serveur en TypeScript avec chargement de `.env` (`node --env-file=.env --import tsx index.ts`)
+- `npm run dev` — serveur TypeScript auto-reloadable avec chargement de `.env` (`node --env-file=.env --watch --import tsx index.ts`)
 - `npm run build` — compilation vers `dist/`
 - `npm run start` — exécution de `dist/index.js` (nécessite un build préalable)
 - `npm run check` — `tsc --noEmit`
