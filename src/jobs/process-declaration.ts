@@ -179,20 +179,6 @@ function toIsoDate(date: Date): string {
   return date.toISOString().slice(0, 10)
 }
 
-function parseOptionalDate(value: string | undefined): Date | undefined {
-  if (!value) {
-    return undefined
-  }
-
-  const date = new Date(value)
-
-  if (Number.isNaN(date.getTime())) {
-    return undefined
-  }
-
-  return date
-}
-
 function metricTypeToLegacyParameter(metricType: MetricType): string {
   switch (metricType) {
     case MetricType.VOLUME_PRELEVE: {
@@ -201,6 +187,10 @@ function metricTypeToLegacyParameter(metricType: MetricType): string {
 
     case MetricType.VOLUME_REJETE: {
       return 'volume rejeté'
+    }
+
+    case MetricType.DEBIT_PRELEVE: {
+      return 'débit prélevé'
     }
 
     case MetricType.INDEX: {
@@ -774,9 +764,7 @@ async function runConnectorForDeclaration(parameters: {
           sourceFiles: toConnectorSourceFiles(fileBatch.sourceFiles),
           // Pour une déclaration, on veut relire tout le fichier.
           // On ne veut pas filtrer à partir de la date d'activation du connecteur.
-          mostRecentAvailableDate:
-            parseOptionalDate(point.mostRecentAvailableDate) ??
-            new Date('1900-01-01T00:00:00.000Z'),
+          mostRecentAvailableDate: new Date('1900-01-01T00:00:00.000Z'),
         })
 
         if (!hasValues(output)) {

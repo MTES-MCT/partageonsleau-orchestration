@@ -52,10 +52,12 @@ export enum MetricType {
   INDEX = 'index',
   VOLUME_PRELEVE = 'volume_preleve',
   VOLUME_REJETE = 'volume_rejete',
+  DEBIT_PRELEVE = 'debit_preleve',
 }
 
 export enum MetricUnit {
   M3 = 'm3',
+  L_S = 'L/s',
 }
 
 export enum Granularity {

@@ -27,11 +27,7 @@ type ColumnDefinition<TKey extends string> = {
 type CadresColumnKey = 'codeInspection' | 'pointSurveillance' | 'typePoint'
 
 type PrelevementsColumnKey =
-  | 'codeInspection'
-  | 'pointSurveillance'
-  | 'typePoint'
-  | 'dateMesure'
-  | 'volume'
+  'codeInspection' | 'pointSurveillance' | 'typePoint' | 'dateMesure' | 'volume'
 
 type GidafCadreRow = {
   codeInspection: string | undefined
@@ -115,6 +111,9 @@ const GIDAF_DATE_FORMATS = [
   'YYYY-MM-DD HH:mm:ss',
   'YYYY-MM-DD HH:mm',
 ]
+
+// Numeric GIDAF cells like "2025" are not valid Excel dates for 2025.
+const MIN_GIDAF_EXCEL_SERIAL_DATE = new Date('2000-01-01T00:00:00.000Z')
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -270,9 +269,13 @@ function dateFromExcelSerial(value: number): Date | undefined {
     return undefined
   }
 
-  return new Date(
+  const date = new Date(
     Date.UTC(parsed.y, parsed.m - 1, parsed.d, parsed.H, parsed.M, parsed.S),
   )
+
+  return date.getTime() >= MIN_GIDAF_EXCEL_SERIAL_DATE.getTime()
+    ? date
+    : undefined
 }
 
 function readAsDate(
