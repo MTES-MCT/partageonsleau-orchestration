@@ -33,7 +33,8 @@ type AquasysRawRow = AquasysIndexRow | AquasysVolumeRow
 
 type AquasysComputedVolumeRow = {
   sourcePointId: string
-  declarantReference: AquasysDeclarantReference
+  declarantReference?: AquasysDeclarantReference
+  sharedDeclarantReferences?: AquasysDeclarantReference[]
   compteur: string
   dateStart: Date
   dateEnd: Date
@@ -52,6 +53,7 @@ type AquasysFetchResult = {
 type AquasysParsedResult = {
   sourcePointId: string
   declarantReference: AquasysDeclarantReference | undefined
+  sharedDeclarantReferences: AquasysDeclarantReference[]
   records: AquasysComputedVolumeRow[]
   granularity: Granularity
   rawRowCount: number
@@ -447,7 +449,24 @@ function buildDuplicateVolumeKey(row: AquasysComputedVolumeRow): string {
   ].join('__')
 }
 
-function splitDuplicatedMeterVolumes(
+function getUniqueDeclarantReferences(
+  references: AquasysDeclarantReference[],
+): AquasysDeclarantReference[] {
+  const referencesByKey = new Map<string, AquasysDeclarantReference>()
+
+  for (const reference of references) {
+    const key = getAquasysDeclarantKey(reference)
+    if (!key || referencesByKey.has(key)) {
+      continue
+    }
+
+    referencesByKey.set(key, reference)
+  }
+
+  return [...referencesByKey.values()]
+}
+
+function deduplicateSharedMeterVolumes(
   volumeRows: AquasysComputedVolumeRow[],
 ): AquasysComputedVolumeRow[] {
   const rowsByDuplicateKey = new Map<string, AquasysComputedVolumeRow[]>()
@@ -459,23 +478,36 @@ function splitDuplicatedMeterVolumes(
     rowsByDuplicateKey.set(key, rows)
   }
 
-  const splitRows: AquasysComputedVolumeRow[] = []
+  const deduplicatedRows: AquasysComputedVolumeRow[] = []
 
   for (const rows of rowsByDuplicateKey.values()) {
-    const declarantKeys = new Set(
-      rows.map((row) => getAquasysDeclarantKey(row.declarantReference)),
+    const sharedDeclarantReferences = getUniqueDeclarantReferences(
+      rows
+        .map((row) => row.declarantReference)
+        .filter(
+          (reference): reference is AquasysDeclarantReference =>
+            reference !== undefined,
+        ),
     )
-    const divisor = declarantKeys.size
 
-    splitRows.push(
-      ...rows.map((row) => ({
-        ...row,
-        value: divisor > 1 ? row.value / divisor : row.value,
-      })),
-    )
+    if (sharedDeclarantReferences.length > 1) {
+      const firstRow = rows[0]
+      if (!firstRow) {
+        continue
+      }
+
+      deduplicatedRows.push({
+        ...firstRow,
+        declarantReference: undefined,
+        sharedDeclarantReferences,
+      })
+      continue
+    }
+
+    deduplicatedRows.push(...rows)
   }
 
-  return splitRows
+  return deduplicatedRows
 }
 
 function consolidatePointVolumes(
@@ -496,6 +528,10 @@ function consolidatePointVolumes(
       sourcePointId: row.sourcePointId,
       declarantReference:
         existing?.declarantReference ?? row.declarantReference,
+      sharedDeclarantReferences: getUniqueDeclarantReferences([
+        ...(existing?.sharedDeclarantReferences ?? []),
+        ...(row.sharedDeclarantReferences ?? []),
+      ]),
       compteur: existing?.compteur ?? row.compteur,
       dateStart: existing?.dateStart ?? row.dateStart,
       dateEnd: row.dateEnd,
@@ -588,20 +624,40 @@ export class AquasysConnector extends BaseConnector<
       context.sourceFile,
       'Export',
     )
-    const sourcePointIds = rows.flatMap((row) => {
-      const parsedRow = parseAquasysWorkbookRow(row)
+    const rawRows = rows
+      .map((row) => parseAquasysWorkbookRow(row))
+      .filter((row): row is AquasysRawRow => row !== undefined)
+    const indexRows = rawRows.filter(
+      (row): row is AquasysIndexRow => !isAquasysVolumeRow(row),
+    )
+    const explicitVolumeRows = rawRows.filter((row): row is AquasysVolumeRow =>
+      isAquasysVolumeRow(row),
+    )
+    const volumeRows = deduplicateSharedMeterVolumes([
+      ...computeVolumesFromIndex(indexRows),
+      ...explicitVolumeRows,
+    ])
+    const sourcePointIds = volumeRows.map((row) =>
+      buildAquasysSourcePointId({
+        sourcePointId: row.sourcePointId,
+        declarantReference: row.declarantReference,
+      }),
+    )
 
-      return parsedRow
-        ? [
-            buildAquasysSourcePointId({
-              sourcePointId: parsedRow.sourcePointId,
-              declarantReference: parsedRow.declarantReference,
-            }),
-          ]
-        : []
-    })
+    if (sourcePointIds.length > 0) {
+      return [...new Set(sourcePointIds)]
+    }
 
-    return [...new Set(sourcePointIds)]
+    return [
+      ...new Set(
+        rawRows.map((row) =>
+          buildAquasysSourcePointId({
+            sourcePointId: row.sourcePointId,
+            declarantReference: row.declarantReference,
+          }),
+        ),
+      ),
+    ]
   }
 
   protected async fetch(
@@ -642,14 +698,14 @@ export class AquasysConnector extends BaseConnector<
     const explicitVolumeRows = sourcePointRows.filter(
       (row): row is AquasysVolumeRow => isAquasysVolumeRow(row),
     )
-    const volumeRows = splitDuplicatedMeterVolumes([
+    const volumeRows = deduplicateSharedMeterVolumes([
       ...computeVolumesFromIndex(indexRows),
       ...explicitVolumeRows,
     ])
       .filter((row) => row.dateEnd.getTime() > startDate.getTime())
       .filter((row) => {
         if (!sourcePointRef.declarantKey) {
-          return true
+          return getAquasysDeclarantKey(row.declarantReference) === undefined
         }
 
         return (
@@ -659,11 +715,16 @@ export class AquasysConnector extends BaseConnector<
       })
     const {records, granularity} = consolidatePointVolumes(volumeRows)
     const declarantReference =
-      records[0]?.declarantReference ?? rawRows[0]?.declarantReference
+      records.find((record) => record.declarantReference)?.declarantReference ??
+      (sourcePointRef.declarantKey ? rawRows[0]?.declarantReference : undefined)
+    const sharedDeclarantReferences = getUniqueDeclarantReferences(
+      records.flatMap((record) => record.sharedDeclarantReferences ?? []),
+    )
 
     return {
       sourcePointId: sourcePointRef.sourcePointId,
       declarantReference,
+      sharedDeclarantReferences,
       records,
       granularity,
       rawRowCount: rawRows.length,
@@ -697,6 +758,16 @@ export class AquasysConnector extends BaseConnector<
               siret: parsedData.declarantReference.siret,
             }
           : undefined,
+        sharedDeclarants:
+          parsedData.sharedDeclarantReferences.length > 0
+            ? parsedData.sharedDeclarantReferences.map((reference) => ({
+                sourceId: reference.codification,
+                name: reference.name,
+                siret: reference.siret,
+              }))
+            : undefined,
+        sharedMeterWithoutAllocation:
+          parsedData.sharedDeclarantReferences.length > 0 || undefined,
         row_count: parsedData.rawRowCount,
         volume_row_count: parsedData.records.length,
       },
