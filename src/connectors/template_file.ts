@@ -314,7 +314,7 @@ export class TemplateFileConnector extends BaseConnector<
   private static readonly metric = {
     type: MetricType.VOLUME_PRELEVE,
     granularity: Granularity.DAY,
-    conflictPolicy: ConflictPolicy.SKIP_NEW_CHUNK,
+    conflictPolicy: ConflictPolicy.SKIP_CONFLICTING_VALUES,
     unit: MetricUnit.M3,
   } as const
 

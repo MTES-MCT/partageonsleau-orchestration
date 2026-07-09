@@ -81,6 +81,7 @@ export type WaterUseCode = string
 export enum ConflictPolicy {
   REPLACE_EXISTING = 'REPLACE_EXISTING',
   SKIP_NEW_CHUNK = 'SKIP_NEW_CHUNK',
+  SKIP_CONFLICTING_VALUES = 'SKIP_CONFLICTING_VALUES',
 }
 
 export type Timeserie = {
