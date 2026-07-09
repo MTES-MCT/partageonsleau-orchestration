@@ -16,12 +16,12 @@ import {BaseConnector} from './base-connector.js'
 type AquasysBaseRow = {
   sourcePointId: string
   declarantReference: AquasysDeclarantReference
+  compteur: string
   dateStart: Date
   value: number
 }
 
 type AquasysIndexRow = AquasysBaseRow & {
-  compteur: string
   coefficient: number
 }
 
@@ -34,6 +34,7 @@ type AquasysRawRow = AquasysIndexRow | AquasysVolumeRow
 type AquasysComputedVolumeRow = {
   sourcePointId: string
   declarantReference: AquasysDeclarantReference
+  compteur: string
   dateStart: Date
   dateEnd: Date
   value: number
@@ -354,6 +355,7 @@ function parseAquasysWorkbookRow(
     return {
       sourcePointId,
       declarantReference,
+      compteur: compteur || 'default',
       dateStart,
       dateEnd,
       value,
@@ -424,6 +426,7 @@ function computeVolumesFromIndex(
       computedRows.push({
         sourcePointId: current.sourcePointId,
         declarantReference: current.declarantReference,
+        compteur: current.compteur || 'default',
         dateStart: previous.dateStart,
         dateEnd: current.dateStart,
         value: volume,
@@ -432,6 +435,47 @@ function computeVolumesFromIndex(
   }
 
   return computedRows
+}
+
+function buildDuplicateVolumeKey(row: AquasysComputedVolumeRow): string {
+  return [
+    row.sourcePointId,
+    row.compteur || 'default',
+    toDateKey(row.dateStart),
+    toDateKey(row.dateEnd),
+    row.value,
+  ].join('__')
+}
+
+function splitDuplicatedMeterVolumes(
+  volumeRows: AquasysComputedVolumeRow[],
+): AquasysComputedVolumeRow[] {
+  const rowsByDuplicateKey = new Map<string, AquasysComputedVolumeRow[]>()
+
+  for (const row of volumeRows) {
+    const key = buildDuplicateVolumeKey(row)
+    const rows = rowsByDuplicateKey.get(key) ?? []
+    rows.push(row)
+    rowsByDuplicateKey.set(key, rows)
+  }
+
+  const splitRows: AquasysComputedVolumeRow[] = []
+
+  for (const rows of rowsByDuplicateKey.values()) {
+    const declarantKeys = new Set(
+      rows.map((row) => getAquasysDeclarantKey(row.declarantReference)),
+    )
+    const divisor = declarantKeys.size
+
+    splitRows.push(
+      ...rows.map((row) => ({
+        ...row,
+        value: divisor > 1 ? row.value / divisor : row.value,
+      })),
+    )
+  }
+
+  return splitRows
 }
 
 function consolidatePointVolumes(
@@ -452,6 +496,7 @@ function consolidatePointVolumes(
       sourcePointId: row.sourcePointId,
       declarantReference:
         existing?.declarantReference ?? row.declarantReference,
+      compteur: existing?.compteur ?? row.compteur,
       dateStart: existing?.dateStart ?? row.dateStart,
       dateEnd: row.dateEnd,
       value: (existing?.value ?? 0) + row.value,
@@ -578,14 +623,31 @@ export class AquasysConnector extends BaseConnector<
       connectorEnabledDate: AquasysConnector.connectorEnabledDate,
     })
 
-    const rawRows = rawData.rows
+    const sourcePointRows = rawData.rows
       .map((row) => parseAquasysWorkbookRow(row))
       .filter((row): row is AquasysRawRow => row !== undefined)
-      .filter((row) => {
-        if (row.sourcePointId !== sourcePointRef.sourcePointId) {
-          return false
-        }
+      .filter((row) => row.sourcePointId === sourcePointRef.sourcePointId)
 
+    const rawRows = sourcePointRef.declarantKey
+      ? sourcePointRows.filter(
+          (row) =>
+            getAquasysDeclarantKey(row.declarantReference) ===
+            sourcePointRef.declarantKey,
+        )
+      : sourcePointRows
+
+    const indexRows = sourcePointRows.filter(
+      (row): row is AquasysIndexRow => !isAquasysVolumeRow(row),
+    )
+    const explicitVolumeRows = sourcePointRows.filter(
+      (row): row is AquasysVolumeRow => isAquasysVolumeRow(row),
+    )
+    const volumeRows = splitDuplicatedMeterVolumes([
+      ...computeVolumesFromIndex(indexRows),
+      ...explicitVolumeRows,
+    ])
+      .filter((row) => row.dateEnd.getTime() > startDate.getTime())
+      .filter((row) => {
         if (!sourcePointRef.declarantKey) {
           return true
         }
@@ -595,17 +657,6 @@ export class AquasysConnector extends BaseConnector<
           sourcePointRef.declarantKey
         )
       })
-
-    const indexRows = rawRows.filter(
-      (row): row is AquasysIndexRow => !isAquasysVolumeRow(row),
-    )
-    const explicitVolumeRows = rawRows.filter((row): row is AquasysVolumeRow =>
-      isAquasysVolumeRow(row),
-    )
-    const volumeRows = [
-      ...computeVolumesFromIndex(indexRows),
-      ...explicitVolumeRows,
-    ].filter((row) => row.dateEnd.getTime() > startDate.getTime())
     const {records, granularity} = consolidatePointVolumes(volumeRows)
     const declarantReference =
       records[0]?.declarantReference ?? rawRows[0]?.declarantReference
