@@ -15,6 +15,7 @@ import {BaseConnector} from './base-connector.js'
 
 type AquasysBaseRow = {
   sourcePointId: string
+  declarantReference: AquasysDeclarantReference
   dateStart: Date
   value: number
 }
@@ -32,6 +33,7 @@ type AquasysRawRow = AquasysIndexRow | AquasysVolumeRow
 
 type AquasysComputedVolumeRow = {
   sourcePointId: string
+  declarantReference: AquasysDeclarantReference
   dateStart: Date
   dateEnd: Date
   value: number
@@ -47,12 +49,23 @@ type AquasysFetchResult = {
 }
 
 type AquasysParsedResult = {
+  sourcePointId: string
+  declarantReference: AquasysDeclarantReference | undefined
   records: AquasysComputedVolumeRow[]
   granularity: Granularity
   rawRowCount: number
 }
 
+type AquasysDeclarantReference = {
+  codification?: string
+  name?: string
+  siret?: string
+}
+
 type AquasysRowInput = {
+  Codification: string | undefined
+  Dénomination_Usager: string | undefined
+  Siret: string | number | undefined
   'Point de prélèvement': string
   'Index ou volume': string
   'Date de mesure': string | number | Date
@@ -68,6 +81,9 @@ type AquasysWorkbookReadResult = {
 }
 
 const AQUASYS_POINT_COLUMN = 'Point de prélèvement'
+const AQUASYS_DECLARANT_CODIFICATION_COLUMN = 'Codification'
+const AQUASYS_DECLARANT_NAME_COLUMN = 'Dénomination_Usager'
+const AQUASYS_DECLARANT_SIRET_COLUMN = 'Siret'
 const AQUASYS_METRIC_COLUMN = 'Index ou volume'
 const AQUASYS_DATE_COLUMN = 'Date de mesure'
 const AQUASYS_DATE_END_COLUMN = 'Date de fin'
@@ -79,6 +95,89 @@ const AQUASYS_REQUIRED_COLUMNS = [
   AQUASYS_DATE_COLUMN,
   AQUASYS_VALUE_COLUMN,
 ]
+const AQUASYS_SOURCE_POINT_SEPARATOR = '||'
+
+function normalizeOptionalText(value: unknown): string | undefined {
+  if (value === undefined || value === null) {
+    return undefined
+  }
+
+  if (
+    typeof value !== 'string' &&
+    typeof value !== 'number' &&
+    typeof value !== 'boolean'
+  ) {
+    return undefined
+  }
+
+  const normalized = String(value).trim().replaceAll(/\s+/gv, ' ')
+
+  return normalized.length > 0 ? normalized : undefined
+}
+
+function normalizeSiret(value: unknown): string | undefined {
+  const normalized = normalizeOptionalText(value)?.replaceAll(/\D/gv, '')
+
+  return normalized?.length ? normalized : undefined
+}
+
+function buildAquasysDeclarantReference(
+  row: AquasysRowInput,
+): AquasysDeclarantReference {
+  return {
+    codification: normalizeOptionalText(
+      row[AQUASYS_DECLARANT_CODIFICATION_COLUMN],
+    ),
+    name: normalizeOptionalText(row[AQUASYS_DECLARANT_NAME_COLUMN]),
+    siret: normalizeSiret(row[AQUASYS_DECLARANT_SIRET_COLUMN]),
+  }
+}
+
+function getAquasysDeclarantKey(
+  declarantReference: AquasysDeclarantReference | undefined,
+): string | undefined {
+  if (!declarantReference) {
+    return undefined
+  }
+
+  return (
+    declarantReference.siret ??
+    declarantReference.codification ??
+    declarantReference.name
+  )
+}
+
+export function buildAquasysSourcePointId(parameters: {
+  sourcePointId: string
+  declarantReference: AquasysDeclarantReference | undefined
+}): string {
+  const {sourcePointId, declarantReference} = parameters
+  const declarantKey = getAquasysDeclarantKey(declarantReference)
+
+  if (!declarantKey) {
+    return sourcePointId
+  }
+
+  return `${sourcePointId}${AQUASYS_SOURCE_POINT_SEPARATOR}${encodeURIComponent(
+    declarantKey,
+  )}`
+}
+
+export function parseAquasysSourcePointId(value: string): {
+  sourcePointId: string
+  declarantKey: string | undefined
+} {
+  const [sourcePointId, encodedDeclarantKey] = value.split(
+    AQUASYS_SOURCE_POINT_SEPARATOR,
+  )
+
+  return {
+    sourcePointId: sourcePointId ?? value,
+    declarantKey: encodedDeclarantKey
+      ? decodeURIComponent(encodedDeclarantKey)
+      : undefined,
+  }
+}
 
 function parseAquasysMetricType(rawMetric: string): MetricType {
   const normalized = String(rawMetric).trim().toLowerCase()
@@ -234,6 +333,7 @@ function parseAquasysWorkbookRow(
   row: AquasysRowInput,
 ): AquasysRawRow | undefined {
   const sourcePointId = String(row[AQUASYS_POINT_COLUMN]).trim()
+  const declarantReference = buildAquasysDeclarantReference(row)
   const metricType = parseAquasysMetricType(row[AQUASYS_METRIC_COLUMN])
   const dateStart = parseAquasysDate(row[AQUASYS_DATE_COLUMN])
   const dateEnd = parseAquasysDate(row[AQUASYS_DATE_END_COLUMN]) ?? dateStart
@@ -253,6 +353,7 @@ function parseAquasysWorkbookRow(
 
     return {
       sourcePointId,
+      declarantReference,
       dateStart,
       dateEnd,
       value,
@@ -261,6 +362,7 @@ function parseAquasysWorkbookRow(
 
   return {
     sourcePointId,
+    declarantReference,
     dateStart,
     compteur: compteur || 'default',
     coefficient,
@@ -278,7 +380,10 @@ function computeVolumesFromIndex(
   const rowsByKey = new Map<string, AquasysIndexRow[]>()
 
   for (const row of indexRows) {
-    const key = `${row.sourcePointId}__${row.compteur || 'default'}`
+    const declarantKey = getAquasysDeclarantKey(row.declarantReference)
+    const key = `${row.sourcePointId}__${
+      row.compteur || 'default'
+    }__${declarantKey ?? 'default'}`
     const values = rowsByKey.get(key) ?? []
     values.push(row)
     rowsByKey.set(key, values)
@@ -318,6 +423,7 @@ function computeVolumesFromIndex(
 
       computedRows.push({
         sourcePointId: current.sourcePointId,
+        declarantReference: current.declarantReference,
         dateStart: previous.dateStart,
         dateEnd: current.dateStart,
         value: volume,
@@ -344,6 +450,8 @@ function consolidatePointVolumes(
     const existing = valuesByDate.get(dateKey)
     valuesByDate.set(dateKey, {
       sourcePointId: row.sourcePointId,
+      declarantReference:
+        existing?.declarantReference ?? row.declarantReference,
       dateStart: existing?.dateStart ?? row.dateStart,
       dateEnd: row.dateEnd,
       value: (existing?.value ?? 0) + row.value,
@@ -436,9 +544,16 @@ export class AquasysConnector extends BaseConnector<
       'Export',
     )
     const sourcePointIds = rows.flatMap((row) => {
-      const sourcePointId = parseAquasysWorkbookRow(row)?.sourcePointId
+      const parsedRow = parseAquasysWorkbookRow(row)
 
-      return sourcePointId ? [sourcePointId] : []
+      return parsedRow
+        ? [
+            buildAquasysSourcePointId({
+              sourcePointId: parsedRow.sourcePointId,
+              declarantReference: parsedRow.declarantReference,
+            }),
+          ]
+        : []
     })
 
     return [...new Set(sourcePointIds)]
@@ -457,6 +572,7 @@ export class AquasysConnector extends BaseConnector<
     rawData: AquasysFetchResult,
     context: ConnectorRunContext,
   ): Promise<AquasysParsedResult> {
+    const sourcePointRef = parseAquasysSourcePointId(context.sourcePointId)
     const startDate = this.resolveStartDate({
       mostRecentAvailableDate: context.mostRecentAvailableDate,
       connectorEnabledDate: AquasysConnector.connectorEnabledDate,
@@ -465,7 +581,20 @@ export class AquasysConnector extends BaseConnector<
     const rawRows = rawData.rows
       .map((row) => parseAquasysWorkbookRow(row))
       .filter((row): row is AquasysRawRow => row !== undefined)
-      .filter((row) => row.sourcePointId === context.sourcePointId)
+      .filter((row) => {
+        if (row.sourcePointId !== sourcePointRef.sourcePointId) {
+          return false
+        }
+
+        if (!sourcePointRef.declarantKey) {
+          return true
+        }
+
+        return (
+          getAquasysDeclarantKey(row.declarantReference) ===
+          sourcePointRef.declarantKey
+        )
+      })
 
     const indexRows = rawRows.filter(
       (row): row is AquasysIndexRow => !isAquasysVolumeRow(row),
@@ -478,8 +607,12 @@ export class AquasysConnector extends BaseConnector<
       ...explicitVolumeRows,
     ].filter((row) => row.dateEnd.getTime() > startDate.getTime())
     const {records, granularity} = consolidatePointVolumes(volumeRows)
+    const declarantReference =
+      records[0]?.declarantReference ?? rawRows[0]?.declarantReference
 
     return {
+      sourcePointId: sourcePointRef.sourcePointId,
+      declarantReference,
       records,
       granularity,
       rawRowCount: rawRows.length,
@@ -488,7 +621,7 @@ export class AquasysConnector extends BaseConnector<
 
   protected async process(
     parsedData: AquasysParsedResult,
-    context: ConnectorRunContext,
+    _context: ConnectorRunContext,
   ): Promise<ParsedPointPayload> {
     const metrics = this.buildMetrics(parsedData)
 
@@ -501,10 +634,18 @@ export class AquasysConnector extends BaseConnector<
       (record) => record.dateEnd,
     )
     return {
-      id_point_de_prelevement: context.sourcePointId,
+      id_point_de_prelevement: parsedData.sourcePointId,
       source_type: SourceType.BATCH,
       source_metadata: {
         provider: 'aquasys',
+        source_point_id: parsedData.sourcePointId,
+        externalDeclarant: parsedData.declarantReference
+          ? {
+              sourceId: parsedData.declarantReference.codification,
+              name: parsedData.declarantReference.name,
+              siret: parsedData.declarantReference.siret,
+            }
+          : undefined,
         row_count: parsedData.rawRowCount,
         volume_row_count: parsedData.records.length,
       },
