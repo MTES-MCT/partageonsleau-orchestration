@@ -525,7 +525,7 @@ export class AquasysConnector extends BaseConnector<
   private static readonly connectorEnabledDate = new Date('2026-01-01')
   private static readonly metric = {
     unit: MetricUnit.M3,
-    conflictPolicy: ConflictPolicy.SKIP_CONFLICTING_VALUES,
+    conflictPolicy: ConflictPolicy.REPLACE_EXISTING_EXCEPT_WILLIE,
   } as const
 
   constructor() {
