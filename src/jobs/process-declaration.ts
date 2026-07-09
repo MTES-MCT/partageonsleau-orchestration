@@ -4,6 +4,7 @@ import {tmpdir} from 'node:os'
 import {Buffer} from 'node:buffer'
 import {mkdtemp, rm, writeFile} from 'node:fs/promises'
 import {connectorRegistry} from '../connectors/index.js'
+import {parseAquasysSourcePointId} from '../connectors/aquasys.js'
 import {
   ConflictPolicy,
   type ConnectorOutput,
@@ -32,6 +33,7 @@ type DeclarationPoint = {
 
 type DeclarationProcessingContext = {
   id: string
+  code?: string
   type: string
   declarantUserId: string
   autoValidationEnabled?: boolean
@@ -57,6 +59,7 @@ type LegacySeriesValue = {
 type LegacySeries = {
   pointPrelevement: string
   usage?: WaterUseCode
+  metadata?: Record<string, unknown>
   parameter: string
   unit: string | undefined
   frequency: string
@@ -127,6 +130,7 @@ function isDeclarationProcessingContext(
 
   if (
     typeof value.id !== 'string' ||
+    (value.code !== undefined && typeof value.code !== 'string') ||
     typeof value.type !== 'string' ||
     typeof value.declarantUserId !== 'string'
   ) {
@@ -394,7 +398,11 @@ function buildDeclarationPointForDetectedSourceId(parameters: {
   sourcePointId: string
 }): DeclarationPoint {
   const {connectorName, declarationPoints, sourcePointId} = parameters
-  const sourcePointKey = normalizeSourcePointKey(sourcePointId)
+  const pointName =
+    connectorName === 'aquasys'
+      ? parseAquasysSourcePointId(sourcePointId).sourcePointId
+      : sourcePointId
+  const sourcePointKey = normalizeSourcePointKey(pointName)
 
   for (const point of declarationPoints) {
     if (getPointLookupKeys({connectorName, point}).includes(sourcePointKey)) {
@@ -407,7 +415,7 @@ function buildDeclarationPointForDetectedSourceId(parameters: {
 
   return {
     pointId: `detected:${sourcePointId}`,
-    name: sourcePointId,
+    name: pointName,
     sourcePointId,
   }
 }
@@ -473,6 +481,7 @@ function metricToLegacySeries(parameters: {
   return {
     pointPrelevement: point.name,
     ...(metric.usage ? {usage: metric.usage} : {}),
+    ...(payload.source_metadata ? {metadata: payload.source_metadata} : {}),
     parameter: metricTypeToLegacyParameter(metric.type),
     unit: metric.unit,
     frequency: metric.granularity,
@@ -844,21 +853,32 @@ async function postIngestionResult(parameters: {
   }
 }
 
-export async function processDeclaration(declarationId: string): Promise<void> {
-  console.log(`[process-declaration] Processing declaration ${declarationId}`)
+type ProcessDeclarationResult = {
+  declarationId: string
+  declarationCode: string | undefined
+  seriesCount: number
+  errorCount: number
+}
+
+export async function processDeclaration(
+  declarationIdentifier: string,
+): Promise<ProcessDeclarationResult> {
+  console.log(
+    `[process-declaration] Processing declaration ${declarationIdentifier}`,
+  )
 
   const token = await getServiceAccountToken()
   const declaration = await getDeclarationProcessingContext(
-    declarationId,
+    declarationIdentifier,
     token,
   )
 
   console.log(
-    `[process-declaration] Declaration ${declaration.id}, type=${declaration.type}, files=${declaration.files.length}, points=${declaration.points.length}`,
+    `[process-declaration] Declaration ${declaration.id}, code=${declaration.code ?? 'n/a'}, type=${declaration.type}, files=${declaration.files.length}, points=${declaration.points.length}`,
   )
 
   const temporaryDirectory = await mkdtemp(
-    path.join(tmpdir(), `ple-declaration-${declarationId}-`),
+    path.join(tmpdir(), `ple-declaration-${declaration.id}-`),
   )
 
   try {
@@ -873,14 +893,21 @@ export async function processDeclaration(declarationId: string): Promise<void> {
     })
 
     await postIngestionResult({
-      declarationId,
+      declarationId: declaration.id,
       token,
       result,
     })
 
     console.log(
-      `[process-declaration] Declaration ${declarationId} ingested: series=${result.data?.series.length ?? 0}, errors=${result.errors.length}`,
+      `[process-declaration] Declaration ${declaration.id} ingested: series=${result.data?.series.length ?? 0}, errors=${result.errors.length}`,
     )
+
+    return {
+      declarationId: declaration.id,
+      declarationCode: declaration.code,
+      seriesCount: result.data?.series.length ?? 0,
+      errorCount: result.errors.length,
+    }
   } finally {
     await rm(temporaryDirectory, {
       recursive: true,
