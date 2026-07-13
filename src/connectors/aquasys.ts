@@ -186,7 +186,7 @@ export function parseAquasysSourcePointId(value: string): {
 function parseAquasysMetricType(rawMetric: string): MetricType {
   const normalized = String(rawMetric).trim().toLowerCase()
   if (normalized.startsWith('volume')) {
-    return MetricType.VOLUME_PRELEVE
+    return MetricType.VOLUME
   }
 
   return MetricType.INDEX
@@ -350,7 +350,7 @@ function parseAquasysWorkbookRow(
     return undefined
   }
 
-  if (metricType === MetricType.VOLUME_PRELEVE) {
+  if (metricType === MetricType.VOLUME) {
     if (!dateEnd) {
       return undefined
     }
@@ -514,18 +514,24 @@ function splitSharedMeterVolumes(
 function consolidatePointVolumes(
   volumeRows: AquasysComputedVolumeRow[],
 ): AquasysPointVolumes {
-  const valuesByDate = new Map<number, AquasysComputedVolumeRow>()
+  const valuesByPeriod = new Map<string, AquasysComputedVolumeRow>()
   const durations: number[] = []
 
   for (const row of volumeRows) {
+    const periodStart = row.dateStart.getTime()
+    const periodEnd = row.dateEnd.getTime()
+    if (periodEnd <= periodStart) {
+      continue
+    }
+
     const duration = diffInDays(row.dateStart, row.dateEnd)
     if (Number.isFinite(duration) && duration >= 0) {
       durations.push(duration)
     }
 
-    const dateKey = row.dateEnd.getTime()
-    const existing = valuesByDate.get(dateKey)
-    valuesByDate.set(dateKey, {
+    const periodKey = `${periodStart}:${periodEnd}`
+    const existing = valuesByPeriod.get(periodKey)
+    valuesByPeriod.set(periodKey, {
       sourcePointId: row.sourcePointId,
       declarantReference:
         existing?.declarantReference ?? row.declarantReference,
@@ -536,16 +542,18 @@ function consolidatePointVolumes(
         ]),
       ],
       compteur: existing?.compteur ?? row.compteur,
-      dateStart: existing?.dateStart ?? row.dateStart,
+      dateStart: row.dateStart,
       dateEnd: row.dateEnd,
       value: (existing?.value ?? 0) + row.value,
     })
   }
 
   return {
-    records: [...valuesByDate.values()].toSorted(
-      (left, right) => left.dateEnd.getTime() - right.dateEnd.getTime(),
-    ),
+    records: [...valuesByPeriod.values()].toSorted((left, right) => {
+      const startDifference =
+        left.dateStart.getTime() - right.dateStart.getTime()
+      return startDifference || left.dateEnd.getTime() - right.dateEnd.getTime()
+    }),
     granularity: inferGranularity(durations),
   }
 }
@@ -639,7 +647,7 @@ export class AquasysConnector extends BaseConnector<
     const volumeRows = splitSharedMeterVolumes([
       ...computeVolumesFromIndex(indexRows),
       ...explicitVolumeRows,
-    ])
+    ]).filter((row) => row.dateEnd.getTime() > row.dateStart.getTime())
     const sourcePointIds = volumeRows.map((row) =>
       buildAquasysSourcePointId({
         sourcePointId: row.sourcePointId,
@@ -797,11 +805,13 @@ export class AquasysConnector extends BaseConnector<
 
     return [
       {
-        type: MetricType.VOLUME_PRELEVE,
+        type: MetricType.VOLUME,
         granularity: parsedData.granularity,
         conflictPolicy: AquasysConnector.metric.conflictPolicy,
         values: parsedData.records.map((record) => ({
           date: record.dateEnd,
+          periodStart: record.dateStart,
+          periodEnd: record.dateEnd,
           value: record.value,
         })),
         unit: AquasysConnector.metric.unit,

@@ -7,6 +7,7 @@ import {
   Granularity,
   MetricType,
   MetricUnit,
+  PointFlowType,
   SourceType,
   type ConnectorDiscoveryContext,
   type ConnectorRunContext,
@@ -36,9 +37,6 @@ type GidafCadreRow = {
   sourcePointId: string | undefined
 }
 
-type GidafMetricType = MetricType.VOLUME_PRELEVE | MetricType.VOLUME_REJETE
-type GidafPointFlowType = 'prelevement' | 'rejet'
-
 type GidafCadresLookup = {
   byCodeAndPointSurveillance: Map<string, GidafCadreRow>
   byPointSurveillance: Map<string, GidafCadreRow>
@@ -47,7 +45,7 @@ type GidafCadresLookup = {
 type GidafRawRow = {
   sourcePointId: string | undefined
   pointSurveillance: string
-  metricType: GidafMetricType
+  flowType?: PointFlowType
   dateStart: Date
   dateEnd: Date
   value: number
@@ -319,11 +317,11 @@ function startOfMonth(date: Date): Date {
 
 function getPointFlowType(
   typePoint: string | undefined,
-): GidafPointFlowType | undefined {
+): PointFlowType | undefined {
   const normalized = stripDiacritics(typePoint).toLowerCase()
 
   if (normalized.includes('rejet')) {
-    return 'rejet'
+    return PointFlowType.REJET
   }
 
   if (
@@ -331,14 +329,10 @@ function getPointFlowType(
     normalized.includes('prelevement') ||
     normalized.includes('prelevements')
   ) {
-    return 'prelevement'
+    return PointFlowType.PRELEVEMENT
   }
 
   return undefined
-}
-
-function isPrelevementType(typePoint: string | undefined): boolean {
-  return getPointFlowType(typePoint) !== 'rejet'
 }
 
 function buildGidafPointSourceId(parameters: {
@@ -693,9 +687,7 @@ function extractPrelevementRows(
     const typePoint =
       readMappedString(sheet, rowIndex, columnMap, 'typePoint') ??
       cadre?.typePoint
-    const metricType = isPrelevementType(typePoint)
-      ? MetricType.VOLUME_PRELEVE
-      : MetricType.VOLUME_REJETE
+    const flowType = getPointFlowType(typePoint)
 
     rows.push({
       sourcePointId:
@@ -705,7 +697,7 @@ function extractPrelevementRows(
           typePoint,
         }) ?? cadre?.sourcePointId,
       pointSurveillance,
-      metricType,
+      flowType,
       dateStart: startOfMonth(dateEnd),
       dateEnd,
       value,
@@ -835,11 +827,35 @@ export class GidafConnector extends BaseConnector<
     parsedData: GidafParsedResult,
     context: ConnectorRunContext,
   ): Promise<ParsedPointPayload> {
+    const explicitFlowTypes = new Set(
+      parsedData.records.flatMap((record) =>
+        record.flowType ? [record.flowType] : [],
+      ),
+    )
+
+    if (explicitFlowTypes.size > 1) {
+      throw new Error(
+        `[${this.name}] Les fichiers GIDAF mélangent prélèvement et rejet pour le point "${context.sourcePointId}".`,
+      )
+    }
+
+    const explicitFlowType = [...explicitFlowTypes][0]
+    if (
+      explicitFlowType &&
+      context.flowType &&
+      explicitFlowType !== context.flowType
+    ) {
+      throw new Error(
+        `[${this.name}] GIDAF indique ${explicitFlowType}, mais le point "${context.sourcePointId}" est configuré en ${context.flowType}.`,
+      )
+    }
+
     const metrics = this.buildMetrics(parsedData.records)
     const {minDate, maxDate} = getDateBounds(parsedData.records)
 
     return {
       id_point_de_prelevement: context.sourcePointId,
+      flow_type: explicitFlowType ?? context.flowType,
       source_type: SourceType.DECLARATION,
       source_metadata: {
         provider: 'gidaf',
@@ -854,28 +870,34 @@ export class GidafConnector extends BaseConnector<
   }
 
   private buildMetrics(records: GidafRawRow[]): ParsedPointPayload['metrics'] {
-    const valuesByType = new Map<GidafMetricType, Map<number, TimeserieValue>>()
+    const valuesByPeriod = new Map<string, TimeserieValue>()
 
     for (const record of records) {
-      const valuesByDate =
-        valuesByType.get(record.metricType) ?? new Map<number, TimeserieValue>()
-      const dateKey = record.dateEnd.getTime()
-      const existing = valuesByDate.get(dateKey)
+      if (record.dateEnd.getTime() <= record.dateStart.getTime()) {
+        continue
+      }
 
-      valuesByDate.set(dateKey, {
+      const periodKey = `${record.dateStart.getTime()}:${record.dateEnd.getTime()}`
+      const existing = valuesByPeriod.get(periodKey)
+
+      valuesByPeriod.set(periodKey, {
         date: record.dateEnd,
+        periodStart: record.dateStart,
+        periodEnd: record.dateEnd,
         value: (existing?.value ?? 0) + record.value,
       })
-
-      valuesByType.set(record.metricType, valuesByDate)
     }
 
-    return [...valuesByType.entries()].map(([type, valuesByDate]) => ({
-      type,
-      granularity: Granularity.MONTH,
-      conflictPolicy: ConflictPolicy.REPLACE_EXISTING,
-      values: sortValuesByDate([...valuesByDate.values()]),
-      unit: MetricUnit.M3,
-    }))
+    return valuesByPeriod.size === 0
+      ? []
+      : [
+          {
+            type: MetricType.VOLUME,
+            granularity: Granularity.MONTH,
+            conflictPolicy: ConflictPolicy.REPLACE_EXISTING,
+            values: sortValuesByDate([...valuesByPeriod.values()]),
+            unit: MetricUnit.M3,
+          },
+        ]
   }
 }

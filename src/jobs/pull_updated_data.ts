@@ -23,6 +23,7 @@ async function processPoint(parameters: {
 
   const {
     pointId,
+    flowType,
     connector: connectorName,
     connectorId,
     connectorRate,
@@ -43,6 +44,7 @@ async function processPoint(parameters: {
   try {
     const output = await connector.run({
       serviceAccount,
+      flowType,
       sourcePointId,
       connectorId,
       rate: connectorRate,
