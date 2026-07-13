@@ -128,7 +128,7 @@ export class WillieConnector extends BaseConnector<
     'https://api.meetwillie.com/v1/stations/consumption'
 
   private static readonly metric = {
-    type: MetricType.VOLUME_PRELEVE,
+    type: MetricType.VOLUME,
     granularity: Granularity.DAY,
     conflictPolicy: ConflictPolicy.SKIP_NEW_CHUNK,
     unit: MetricUnit.M3,

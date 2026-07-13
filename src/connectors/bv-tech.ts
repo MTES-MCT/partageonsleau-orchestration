@@ -798,7 +798,7 @@ function buildParsedPayload(parameters: {
   const firstValue = values[0]
   const lastValue = values.at(-1)
   const metric: Timeserie = {
-    type: MetricType.VOLUME_PRELEVE,
+    type: MetricType.VOLUME,
     granularity: Granularity.DAY,
     conflictPolicy: ConflictPolicy.REPLACE_EXISTING,
     values,
@@ -808,7 +808,7 @@ function buildParsedPayload(parameters: {
 
   if (debitValues.length > 0) {
     metrics.push({
-      type: MetricType.DEBIT_PRELEVE,
+      type: MetricType.DEBIT,
       granularity: Granularity.FIFTEEN_MINUTES,
       conflictPolicy: ConflictPolicy.REPLACE_EXISTING,
       values: debitValues,
