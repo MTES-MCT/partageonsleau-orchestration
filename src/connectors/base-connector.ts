@@ -23,7 +23,10 @@ export abstract class BaseConnector<TRawData, TParsedData> {
       connectorId: context.connectorId,
       connectorRate: context.rate,
       lastRunAt: new Date(),
-      data: parsedData,
+      data: {
+        ...parsedData,
+        flow_type: parsedData.flow_type ?? context.flowType,
+      },
     }
   }
 

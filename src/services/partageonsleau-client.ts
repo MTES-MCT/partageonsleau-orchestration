@@ -1,6 +1,7 @@
 import {
   Granularity,
   MetricType,
+  PointFlowType,
   type DeclarantContext,
   type ConnectorOutput,
   type ParsedPointPayload,
@@ -62,6 +63,7 @@ type DeclarantContextPayload = {
   contextId: string
   points: Array<{
     pointId: string
+    flowType?: PointFlowType
     sourcePointId: string
     connector: string
     connectorId?: string | undefined
@@ -84,6 +86,7 @@ type DeclarantContextApiResponse = {
     point: {
       id: string
       name?: string
+      flowType?: PointFlowType
     }
     mostRecentAvailableDate?: string | undefined
     connectors?:
@@ -120,6 +123,9 @@ function isDeclarantContextPayload(
     return (
       isRecord(point) &&
       (point.pointId === undefined || typeof point.pointId === 'string') &&
+      (point.flowType === undefined ||
+        point.flowType === PointFlowType.PRELEVEMENT ||
+        point.flowType === PointFlowType.REJET) &&
       typeof point.sourcePointId === 'string' &&
       typeof point.connector === 'string' &&
       (point.connectorId === undefined ||
@@ -194,6 +200,9 @@ function isDeclarantContextApiResponse(
 
     return (
       typeof exploitation.point.id === 'string' &&
+      (exploitation.point.flowType === undefined ||
+        exploitation.point.flowType === PointFlowType.PRELEVEMENT ||
+        exploitation.point.flowType === PointFlowType.REJET) &&
       (exploitation.point.name === undefined ||
         typeof exploitation.point.name === 'string') &&
       (exploitation.mostRecentAvailableDate === undefined ||
@@ -288,20 +297,14 @@ type BucketAggregator = (
 ) => TimeserieValue
 
 const metricBucketAggregators: Record<MetricType, BucketAggregator> = {
-  [MetricType.VOLUME_PRELEVE](existing, candidate) {
+  [MetricType.VOLUME](existing, candidate) {
     // Une valeur de volume est additive dans un même bucket temporel.
     return {
-      date: existing.date,
+      ...existing,
       value: existing.value + candidate.value,
     }
   },
-  [MetricType.VOLUME_REJETE](existing, candidate) {
-    return {
-      date: existing.date,
-      value: existing.value + candidate.value,
-    }
-  },
-  [MetricType.DEBIT_PRELEVE](_existing, candidate) {
+  [MetricType.DEBIT](_existing, candidate) {
     // Un débit est instantané : on conserve la dernière valeur observée du bucket.
     return candidate
   },
@@ -331,12 +334,34 @@ function normalizeTimeserieValues(metric: Timeserie): TimeserieValue[] {
   const datedValues = metric.values
     .map((value) => {
       const parsedDate = new Date(value.date)
+      const hasExplicitPeriod =
+        value.periodStart !== undefined || value.periodEnd !== undefined
+      const parsedPeriodStart = value.periodStart
+        ? new Date(value.periodStart)
+        : undefined
+      const parsedPeriodEnd = value.periodEnd
+        ? new Date(value.periodEnd)
+        : undefined
+
       return {
+        hasExplicitPeriod,
         parsedDate,
+        parsedPeriodEnd,
+        parsedPeriodStart,
         value,
       }
     })
-    .filter((entry) => !Number.isNaN(entry.parsedDate.getTime()))
+    .filter(
+      (entry) =>
+        !Number.isNaN(entry.parsedDate.getTime()) &&
+        (!entry.hasExplicitPeriod ||
+          (entry.parsedPeriodStart !== undefined &&
+            entry.parsedPeriodEnd !== undefined &&
+            !Number.isNaN(entry.parsedPeriodStart.getTime()) &&
+            !Number.isNaN(entry.parsedPeriodEnd.getTime()) &&
+            entry.parsedPeriodEnd.getTime() >
+              entry.parsedPeriodStart.getTime())),
+    )
 
   const sortedValues: typeof datedValues = []
   for (const entry of datedValues) {
@@ -350,13 +375,34 @@ function normalizeTimeserieValues(metric: Timeserie): TimeserieValue[] {
     }
   }
 
-  const valuesByBucket = new Map<number, TimeserieValue>()
+  const valuesByBucket = new Map<string, TimeserieValue>()
   for (const entry of sortedValues) {
+    if (
+      entry.hasExplicitPeriod &&
+      entry.parsedPeriodStart &&
+      entry.parsedPeriodEnd
+    ) {
+      const bucketKey = `period:${entry.parsedPeriodStart.getTime()}:${entry.parsedPeriodEnd.getTime()}`
+      const candidate: TimeserieValue = {
+        date: entry.parsedDate,
+        periodEnd: entry.parsedPeriodEnd,
+        periodStart: entry.parsedPeriodStart,
+        value: entry.value.value,
+      }
+      const merged = mergeValuesInBucket(
+        metric.type,
+        valuesByBucket.get(bucketKey),
+        candidate,
+      )
+      valuesByBucket.set(bucketKey, merged)
+      continue
+    }
+
     const alignedDate = alignDateToGranularity(
       entry.parsedDate,
       metric.granularity,
     )
-    const bucketKey = alignedDate.getTime()
+    const bucketKey = `instant:${alignedDate.getTime()}`
     const candidate: TimeserieValue = {
       date: alignedDate,
       value: entry.value.value,
@@ -369,17 +415,20 @@ function normalizeTimeserieValues(metric: Timeserie): TimeserieValue[] {
     valuesByBucket.set(bucketKey, merged)
   }
 
-  const sortedEntries: Array<[number, TimeserieValue]> = []
+  const sortedEntries: TimeserieValue[] = []
   for (const entry of valuesByBucket.entries()) {
-    const insertIndex = sortedEntries.findIndex(([key]) => key > entry[0])
+    const value = entry[1]
+    const insertIndex = sortedEntries.findIndex(
+      (current) => current.date.getTime() > value.date.getTime(),
+    )
     if (insertIndex === -1) {
-      sortedEntries.push(entry)
+      sortedEntries.push(value)
     } else {
-      sortedEntries.splice(insertIndex, 0, entry)
+      sortedEntries.splice(insertIndex, 0, value)
     }
   }
 
-  return sortedEntries.map(([, value]) => value)
+  return sortedEntries
 }
 
 function normalizePayloadData(data: ParsedPointPayload): ParsedPointPayload {
@@ -388,15 +437,25 @@ function normalizePayloadData(data: ParsedPointPayload): ParsedPointPayload {
     values: normalizeTimeserieValues(metric),
   }))
 
-  const allMetricDates = normalizedMetrics.flatMap((metric) =>
-    metric.values.map((value) => value.date),
+  const allMetricStarts = normalizedMetrics.flatMap((metric) =>
+    metric.values.map((value) => value.periodStart ?? value.date),
+  )
+  const allMetricEnds = normalizedMetrics.flatMap((metric) =>
+    metric.values.map((value) => value.periodEnd ?? value.date),
+  )
+  const minTimestamp = Math.min(
+    ...allMetricStarts.map((value) => value.getTime()),
+  )
+  const maxTimestamp = Math.max(
+    ...allMetricEnds.map((value) => value.getTime()),
   )
 
   return {
     ...data,
     metrics: normalizedMetrics,
-    min_date: allMetricDates.length > 0 ? allMetricDates[0] : data.min_date,
-    max_date: allMetricDates.length > 0 ? allMetricDates.at(-1) : data.max_date,
+    min_date:
+      allMetricStarts.length > 0 ? new Date(minTimestamp) : data.min_date,
+    max_date: allMetricEnds.length > 0 ? new Date(maxTimestamp) : data.max_date,
   }
 }
 
@@ -445,6 +504,10 @@ function serializePayloadDataForPost(
       values: metric.values.map((value) => ({
         ...value,
         date: value.date.toISOString(),
+        ...(value.periodStart
+          ? {periodStart: value.periodStart.toISOString()}
+          : {}),
+        ...(value.periodEnd ? {periodEnd: value.periodEnd.toISOString()} : {}),
       })),
     })),
   }
@@ -609,6 +672,7 @@ export class PartageonsLeauClient {
           contextId: context.contextId,
           points: context.points.map((point) => ({
             pointId: point.pointId,
+            flowType: point.flowType,
             sourcePointId: point.sourcePointId,
             connector: point.connector,
             connectorId: point.connectorId,
@@ -651,6 +715,7 @@ export class PartageonsLeauClient {
 
           return {
             pointId: exploitation.point.id,
+            flowType: exploitation.point.flowType,
             sourcePointId:
               typeof sourcePointId === 'string'
                 ? sourcePointId

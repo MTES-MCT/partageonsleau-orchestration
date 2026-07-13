@@ -11,6 +11,7 @@ import {
   type ConnectorSourceFile,
   Granularity,
   MetricType,
+  PointFlowType,
   type ParsedPointPayload,
   type Timeserie,
   type WaterUseCode,
@@ -26,6 +27,7 @@ type DeclarationFile = {
 type DeclarationPoint = {
   pointId: string
   name: string
+  flowType?: PointFlowType
   sourceId?: string | undefined
   sourcePointId?: string
   mostRecentAvailableDate?: string | undefined
@@ -53,11 +55,14 @@ type LocalDeclarationFile = DeclarationFile & {
 
 type LegacySeriesValue = {
   date: string
+  periodStart?: string
+  periodEnd?: string
   value: number
 }
 
 type LegacySeries = {
   pointPrelevement: string
+  flowType?: PointFlowType
   usage?: WaterUseCode
   metadata?: Record<string, unknown>
   parameter: string
@@ -101,6 +106,14 @@ function isDeclarationPoint(value: unknown): value is DeclarationPoint {
   }
 
   if (typeof value.pointId !== 'string' || typeof value.name !== 'string') {
+    return false
+  }
+
+  if (
+    value.flowType !== undefined &&
+    value.flowType !== PointFlowType.PRELEVEMENT &&
+    value.flowType !== PointFlowType.REJET
+  ) {
     return false
   }
 
@@ -187,18 +200,14 @@ function toLegacyValueDate(date: Date, granularity: Granularity): string {
   return granularity === Granularity.DAY ? toIsoDate(date) : date.toISOString()
 }
 
-function metricTypeToLegacyParameter(metricType: MetricType): string {
+function metricTypeToParameter(metricType: MetricType): string {
   switch (metricType) {
-    case MetricType.VOLUME_PRELEVE: {
-      return 'volume prélevé'
+    case MetricType.VOLUME: {
+      return 'volume'
     }
 
-    case MetricType.VOLUME_REJETE: {
-      return 'volume rejeté'
-    }
-
-    case MetricType.DEBIT_PRELEVE: {
-      return 'débit prélevé'
+    case MetricType.DEBIT: {
+      return 'débit'
     }
 
     case MetricType.INDEX: {
@@ -466,6 +475,10 @@ function metricToLegacySeries(parameters: {
     .filter((value) => Number.isFinite(value.value))
     .map((value) => ({
       date: toLegacyValueDate(value.date, metric.granularity),
+      ...(value.periodStart
+        ? {periodStart: value.periodStart.toISOString()}
+        : {}),
+      ...(value.periodEnd ? {periodEnd: value.periodEnd.toISOString()} : {}),
       value: value.value,
     }))
 
@@ -475,14 +488,19 @@ function metricToLegacySeries(parameters: {
 
   // eslint-disable-next-line unicorn/no-array-sort
   const sortedValues = [...values].sort((left, right) =>
-    left.date.localeCompare(right.date),
+    (left.periodStart ?? left.date).localeCompare(
+      right.periodStart ?? right.date,
+    ),
   )
 
   return {
     pointPrelevement: point.name,
+    ...((payload.flow_type ?? point.flowType)
+      ? {flowType: payload.flow_type ?? point.flowType}
+      : {}),
     ...(metric.usage ? {usage: metric.usage} : {}),
     ...(payload.source_metadata ? {metadata: payload.source_metadata} : {}),
-    parameter: metricTypeToLegacyParameter(metric.type),
+    parameter: metricTypeToParameter(metric.type),
     unit: metric.unit,
     frequency: metric.granularity,
     minDate: payload.min_date
@@ -532,8 +550,7 @@ function connectorOutputsToLegacyPayload(parameters: {
   }
 
   const hasVolumeSeries = series.some(
-    (item) =>
-      item.parameter === metricTypeToLegacyParameter(MetricType.VOLUME_PRELEVE),
+    (item) => item.parameter === metricTypeToParameter(MetricType.VOLUME),
   )
 
   if (configuredConflictPolicies.size === 1) {
@@ -771,6 +788,7 @@ async function runConnectorForDeclaration(parameters: {
       try {
         const output = await connector.run({
           serviceAccount: 'declaration-upload',
+          flowType: point.flowType,
           sourcePointId,
           rate: 100,
           sourceFile: fileBatch.sourceFile?.localPath,

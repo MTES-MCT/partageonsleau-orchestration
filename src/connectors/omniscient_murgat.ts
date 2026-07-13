@@ -217,7 +217,7 @@ export class OmniscientMurgatConnector extends BaseConnector<
     new Date('2021-10-12T08:00:00.000Z')
 
   private static readonly metric = {
-    type: MetricType.VOLUME_PRELEVE,
+    type: MetricType.VOLUME,
     granularity: Granularity.HOUR,
     conflictPolicy: ConflictPolicy.SKIP_NEW_CHUNK,
     unit: MetricUnit.M3,

@@ -4,6 +4,7 @@ export type ConfigEntry = {
 
 export type ServiceAccountPointContext = {
   pointId: string
+  flowType?: PointFlowType
   sourcePointId: string
   connector: string
   connectorId?: string
@@ -24,6 +25,7 @@ export type DeclarantContext = {
 
 export type ConnectorRunContext = {
   serviceAccount: string
+  flowType?: PointFlowType
   sourcePointId: string
   connectorId?: string
   rate: number
@@ -45,14 +47,21 @@ export type ConnectorSourceFile = {
 
 export type TimeserieValue = {
   date: Date
+  // Bornes semi-ouvertes [periodStart, periodEnd) quand la source décrit une plage.
+  periodStart?: Date
+  periodEnd?: Date
   value: number
 }
 
 export enum MetricType {
   INDEX = 'index',
-  VOLUME_PRELEVE = 'volume_preleve',
-  VOLUME_REJETE = 'volume_rejete',
-  DEBIT_PRELEVE = 'debit_preleve',
+  VOLUME = 'volume',
+  DEBIT = 'debit',
+}
+
+export enum PointFlowType {
+  PRELEVEMENT = 'PRELEVEMENT',
+  REJET = 'REJET',
 }
 
 export enum MetricUnit {
@@ -96,6 +105,7 @@ export type Timeserie = {
 
 export type ParsedPointPayload = {
   id_point_de_prelevement: string
+  flow_type?: PointFlowType
   source_type: SourceType
   source_metadata: Record<string, unknown> | undefined
   min_date: Date | undefined

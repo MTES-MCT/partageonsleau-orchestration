@@ -7,10 +7,12 @@ import {
   Granularity,
   MetricType,
   MetricUnit,
+  PointFlowType,
   SourceType,
   type ConnectorDiscoveryContext,
   type ConnectorRunContext,
   type ParsedPointPayload,
+  type TimeserieValue,
   type WaterUseCode,
 } from './types.js'
 import {BaseConnector} from './base-connector.js'
@@ -20,6 +22,7 @@ type TemplateFileRowInput = Record<string, unknown> & {
   id_point_de_prelevement_ou_rejet?: string | number
   date_debut?: string | number | Date
   date_fin?: string | number | Date
+  volume_m3?: string | number
   volume_preleve_m3?: string | number
   volume_rejete_m3?: string | number
   usage?: string | number
@@ -27,10 +30,11 @@ type TemplateFileRowInput = Record<string, unknown> & {
 
 type TemplateFileRawRow = {
   sourcePointId: string
-  metricType: MetricType.VOLUME_PRELEVE
+  flowType?: PointFlowType
+  metricType: MetricType.VOLUME
   usage?: WaterUseCode
   dateStart: Date
-  dateEnd: Date | undefined
+  dateEnd: Date
   value: number
 }
 
@@ -51,7 +55,11 @@ const ID_COLUMNS = [
 
 const DATE_START_COLUMN = 'date_debut'
 const DATE_END_COLUMN = 'date_fin'
-const VOLUME_COLUMN = 'volume_preleve_m3'
+const VOLUME_COLUMNS = [
+  {name: 'volume_m3', flowType: undefined},
+  {name: 'volume_preleve_m3', flowType: PointFlowType.PRELEVEMENT},
+  {name: 'volume_rejete_m3', flowType: PointFlowType.REJET},
+] as const
 const USAGE_COLUMN = 'usage'
 
 const SANDRE_WATER_USE_CODES = [
@@ -262,20 +270,39 @@ function parseTemplateVolumeRow(
   const sourcePointId = getSourcePointId(row)
   const dateStart = parseDeclarationDate(row[DATE_START_COLUMN])
   const dateEnd = parseDeclarationDate(row[DATE_END_COLUMN])
-  const volumeValue = parseDeclarationNumber(row[VOLUME_COLUMN])
   const usage = parseTemplateUsageCode(row[USAGE_COLUMN])
+  const populatedVolumeColumns = VOLUME_COLUMNS.flatMap((column) => {
+    const value = parseDeclarationNumber(row[column.name])
 
-  if (!sourcePointId || !dateStart || volumeValue === undefined) {
+    return value === undefined ? [] : [{...column, value}]
+  })
+
+  if (populatedVolumeColumns.length > 1) {
+    throw new Error(
+      `[template_file] Plusieurs colonnes de volume sont renseignées pour le point "${sourcePointId ?? 'inconnu'}". Utilisez uniquement volume_m3.`,
+    )
+  }
+
+  const volume = populatedVolumeColumns[0]
+
+  if (
+    !sourcePointId ||
+    !dateStart ||
+    !dateEnd ||
+    dateEnd.getTime() <= dateStart.getTime() ||
+    !volume
+  ) {
     return undefined
   }
 
   return {
     sourcePointId,
-    metricType: MetricType.VOLUME_PRELEVE,
+    flowType: volume.flowType,
+    metricType: MetricType.VOLUME,
     usage,
     dateStart,
     dateEnd,
-    value: volumeValue,
+    value: volume.value,
   }
 }
 
@@ -312,7 +339,7 @@ export class TemplateFileConnector extends BaseConnector<
 > {
   private static readonly connectorEnabledDate = new Date('2026-01-01')
   private static readonly metric = {
-    type: MetricType.VOLUME_PRELEVE,
+    type: MetricType.VOLUME,
     granularity: Granularity.DAY,
     conflictPolicy: ConflictPolicy.SKIP_CONFLICTING_VALUES,
     unit: MetricUnit.M3,
@@ -392,6 +419,27 @@ export class TemplateFileConnector extends BaseConnector<
         normalizePointIdentifier(row.sourcePointId) === normalizedSourcePointId,
     )
 
+    const explicitFlowTypes = new Set(
+      matchingRows.flatMap((row) => (row.flowType ? [row.flowType] : [])),
+    )
+
+    if (explicitFlowTypes.size > 1) {
+      throw new Error(
+        `[${this.name}] Le fichier mélange prélèvement et rejet pour le point "${context.sourcePointId}".`,
+      )
+    }
+
+    const explicitFlowType = [...explicitFlowTypes][0]
+    if (
+      explicitFlowType &&
+      context.flowType &&
+      explicitFlowType !== context.flowType
+    ) {
+      throw new Error(
+        `[${this.name}] La colonne de volume indique ${explicitFlowType}, mais le point "${context.sourcePointId}" est configuré en ${context.flowType}.`,
+      )
+    }
+
     console.log(
       `[${this.name}] Matching rows before date filter=${matchingRows.length}, sourcePointId="${context.sourcePointId}"`,
     )
@@ -416,7 +464,7 @@ export class TemplateFileConnector extends BaseConnector<
       {
         type: MetricType
         usage: WaterUseCode | undefined
-        values: Array<{date: Date; value: number}>
+        values: TimeserieValue[]
       }
     >()
 
@@ -429,7 +477,9 @@ export class TemplateFileConnector extends BaseConnector<
       }
 
       group.values.push({
-        date: record.dateStart,
+        date: record.dateEnd,
+        periodStart: record.dateStart,
+        periodEnd: record.dateEnd,
         value: record.value,
       })
 
@@ -442,21 +492,25 @@ export class TemplateFileConnector extends BaseConnector<
         ...(usage ? {usage} : {}),
         granularity: TemplateFileConnector.metric.granularity,
         conflictPolicy: TemplateFileConnector.metric.conflictPolicy,
-        values: values.map((value) => ({
-          date: value.date,
-          value: value.value,
-        })),
+        values,
         unit: TemplateFileConnector.metric.unit,
       }),
     )
 
-    const {minDate, maxDate} = this.getMinMaxDates(
+    const {minDate} = this.getMinMaxDates(
       parsedData.records,
       (record) => record.dateStart,
+    )
+    const {maxDate} = this.getMinMaxDates(
+      parsedData.records,
+      (record) => record.dateEnd,
     )
 
     return {
       id_point_de_prelevement: context.sourcePointId,
+      flow_type:
+        parsedData.records.find((record) => record.flowType)?.flowType ??
+        context.flowType,
       source_type: SourceType.BATCH,
       source_metadata: {
         provider: 'template_file',
