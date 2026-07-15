@@ -24,9 +24,10 @@ type DeclarationFile = {
   url: string
 }
 
-type DeclarationPoint = {
+export type DeclarationPoint = {
   pointId: string
   name: string
+  codeBSS?: string
   flowType?: PointFlowType
   sourceId?: string | undefined
   sourcePointId?: string
@@ -118,6 +119,10 @@ function isDeclarationPoint(value: unknown): value is DeclarationPoint {
   }
 
   if (value.sourceId !== undefined && typeof value.sourceId !== 'string') {
+    return false
+  }
+
+  if (value.codeBSS !== undefined && typeof value.codeBSS !== 'string') {
     return false
   }
 
@@ -220,10 +225,16 @@ function sanitizeFilename(filename: string): string {
   return path.basename(filename || 'file').replaceAll(/[^\w.\-]+/gv, '_')
 }
 
-function resolveConnectorName(declarationType: string): string | undefined {
+export function resolveConnectorName(
+  declarationType: string,
+): string | undefined {
   switch (declarationType) {
     case 'template-file': {
       return 'template_file'
+    }
+
+    case 'smnpr': {
+      return 'smnpr'
     }
 
     case 'aquasys':
@@ -245,11 +256,15 @@ function resolveConnectorName(declarationType: string): string | undefined {
   }
 }
 
-function resolveSourcePointId(parameters: {
+export function resolveSourcePointId(parameters: {
   connectorName: string
   point: DeclarationPoint
 }): string {
   const {connectorName, point} = parameters
+
+  if (connectorName === 'smnpr') {
+    return point.codeBSS ?? point.sourcePointId ?? point.name
+  }
 
   if (point.sourcePointId) {
     return point.sourcePointId
@@ -287,6 +302,11 @@ function selectFilesForConnector(parameters: {
       )
 
       return templateFiles.length > 0 ? templateFiles : files
+    }
+
+    case 'smnpr': {
+      const smnprFiles = files.filter((file) => file.type === 'smnpr')
+      return smnprFiles.length > 0 ? smnprFiles : files
     }
 
     case 'bv-tech': {
@@ -389,6 +409,7 @@ function getPointLookupKeys(parameters: {
   const values = [
     resolveSourcePointId({connectorName, point}),
     point.name,
+    point.codeBSS,
     point.sourceId,
     point.sourcePointId,
   ]
@@ -429,7 +450,7 @@ function buildDeclarationPointForDetectedSourceId(parameters: {
   }
 }
 
-function buildPointsForDetectedSourceIds(parameters: {
+export function buildPointsForDetectedSourceIds(parameters: {
   connectorName: string
   declarationPoints: DeclarationPoint[]
   detectedSourcePointIds: string[]
