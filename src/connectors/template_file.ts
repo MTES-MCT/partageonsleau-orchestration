@@ -1,7 +1,3 @@
-import fs from 'node:fs/promises'
-import path from 'node:path'
-import moment from 'moment'
-import * as XLSX from 'xlsx'
 import {
   ConflictPolicy,
   Granularity,
@@ -16,6 +12,12 @@ import {
   type WaterUseCode,
 } from './types.js'
 import {BaseConnector} from './base-connector.js'
+import {
+  normalizePointIdentifier,
+  parseDeclarationDate,
+  parseDeclarationNumber,
+  readSpreadsheetSheet,
+} from './spreadsheet.js'
 
 type TemplateFileRowInput = Record<string, unknown> & {
   id_point_de_prelevement?: string | number
@@ -143,27 +145,6 @@ const LEGACY_USAGE_TO_SANDRE_CODE: Readonly<Record<string, WaterUseCode>> = {
   DOMESTIQUE: '17',
 }
 
-const DECLARATION_DATE_FORMATS = [
-  'DD/MM/YYYY',
-  'D/M/YYYY',
-  'DD-MM-YYYY',
-  'D-M-YYYY',
-  'YYYY-MM-DD',
-  'YYYY/MM/DD',
-  'DD/MM/YYYY HH:mm:ss',
-  'DD/MM/YYYY HH:mm',
-  'YYYY-MM-DD HH:mm:ss',
-  'YYYY-MM-DD HH:mm',
-]
-
-function normalizePointIdentifier(value: string): string {
-  return value
-    .trim()
-    .normalize('NFC')
-    .toLocaleLowerCase('fr-FR')
-    .replaceAll(/\s+/gv, ' ')
-}
-
 function getSourcePointId(row: TemplateFileRowInput): string | undefined {
   for (const column of ID_COLUMNS) {
     const value = row[column]
@@ -175,75 +156,6 @@ function getSourcePointId(row: TemplateFileRowInput): string | undefined {
   }
 
   return undefined
-}
-
-function parseExcelSerialDate(rawDate: number): Date | undefined {
-  if (!Number.isFinite(rawDate)) {
-    return undefined
-  }
-
-  const excelEpochUtc = Date.UTC(1899, 11, 30)
-  const millisecondsInDay = 24 * 60 * 60 * 1000
-  const timestamp = excelEpochUtc + Math.round(rawDate * millisecondsInDay)
-  const date = new Date(timestamp)
-
-  if (Number.isNaN(date.getTime())) {
-    return undefined
-  }
-
-  return date
-}
-
-function parseDeclarationDate(rawDate: unknown): Date | undefined {
-  if (rawDate instanceof Date) {
-    const date = moment.utc(rawDate)
-
-    return date.isValid() ? date.toDate() : undefined
-  }
-
-  if (typeof rawDate === 'number') {
-    return parseExcelSerialDate(rawDate)
-  }
-
-  if (typeof rawDate !== 'string') {
-    return undefined
-  }
-
-  const text = rawDate.trim()
-
-  if (!text) {
-    return undefined
-  }
-
-  const parsedDate = moment.utc(text, DECLARATION_DATE_FORMATS, true)
-
-  if (parsedDate.isValid()) {
-    return parsedDate.toDate()
-  }
-
-  const parsedIsoDate = moment.utc(text, moment.ISO_8601, true)
-
-  return parsedIsoDate.isValid() ? parsedIsoDate.toDate() : undefined
-}
-
-function parseDeclarationNumber(rawValue: unknown): number | undefined {
-  if (typeof rawValue === 'number' && Number.isFinite(rawValue)) {
-    return rawValue
-  }
-
-  if (typeof rawValue !== 'string') {
-    return undefined
-  }
-
-  const cleaned = rawValue.trim().replaceAll(/\s/gv, '').replace(',', '.')
-
-  if (!cleaned) {
-    return undefined
-  }
-
-  const parsed = Number(cleaned)
-
-  return Number.isFinite(parsed) ? parsed : undefined
 }
 
 function parseTemplateUsageCode(rawUsage: unknown): WaterUseCode | undefined {
@@ -306,33 +218,6 @@ function parseTemplateVolumeRow(
   }
 }
 
-async function readRowsFromWorkbook(
-  filePath: string,
-  sheetName: string,
-): Promise<TemplateFileRowInput[]> {
-  const absolutePath = path.resolve(filePath)
-  const buffer = await fs.readFile(absolutePath)
-
-  const workbook = XLSX.read(buffer, {
-    type: 'buffer',
-    cellDates: true,
-  })
-
-  const sheet = workbook.Sheets[sheetName]
-
-  if (!sheet) {
-    console.warn(
-      `[template_file] Sheet "${sheetName}" not found in file "${absolutePath}". Available sheets: ${workbook.SheetNames.join(', ')}`,
-    )
-    return []
-  }
-
-  return XLSX.utils.sheet_to_json<TemplateFileRowInput>(sheet, {
-    defval: '',
-    raw: true,
-  })
-}
-
 export class TemplateFileConnector extends BaseConnector<
   TemplateFileFetchResult,
   TemplateFileParsedResult
@@ -356,9 +241,10 @@ export class TemplateFileConnector extends BaseConnector<
       return []
     }
 
-    const rows = await readRowsFromWorkbook(
+    const {rows} = await readSpreadsheetSheet<TemplateFileRowInput>(
       context.sourceFile,
       TEMPLATE_SHEET_NAME,
+      {connectorName: this.name},
     )
     const sourcePointIds = rows.flatMap((row) => {
       const sourcePointId = getSourcePointId(row)
@@ -375,7 +261,11 @@ export class TemplateFileConnector extends BaseConnector<
     const filePath =
       context.sourceFile ?? 'data/declaration_valloire_gallaure_11_2025.xlsx'
 
-    const rows = await readRowsFromWorkbook(filePath, TEMPLATE_SHEET_NAME)
+    const {rows} = await readSpreadsheetSheet<TemplateFileRowInput>(
+      filePath,
+      TEMPLATE_SHEET_NAME,
+      {connectorName: this.name},
+    )
 
     console.log(
       `[${this.name}] Loaded rows=${rows.length}, file="${filePath}", sheet="${TEMPLATE_SHEET_NAME}"`,

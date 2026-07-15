@@ -6,6 +6,7 @@ import {GidafConnector} from './gidaf.js'
 import {type BaseConnector} from './base-connector.js'
 import {BvTechConnector} from './bv-tech.js'
 import {OmniscientMurgatConnector} from './omniscient_murgat.js'
+import {SmnprConnector} from './smnpr.js'
 
 export const connectorRegistry = new Map<
   string,
@@ -16,6 +17,7 @@ export const connectorRegistry = new Map<
   ['orange_live_objects', new OrangeLiveObjectsConnector()],
   ['aquasys', new AquasysConnector()],
   ['template_file', new TemplateFileConnector()],
+  ['smnpr', new SmnprConnector()],
   ['gidaf', new GidafConnector()],
   ['omniscient_murgat', new OmniscientMurgatConnector()],
 ])
