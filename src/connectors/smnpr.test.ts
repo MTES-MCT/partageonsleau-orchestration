@@ -127,6 +127,35 @@ void test('le connecteur découvre les BSS et produit les volumes par période',
   )
 })
 
+void test('le connecteur répartit un volume entre les BSS déclarés dans une même cellule', async (t) => {
+  const fixture = await createWorkbookFixture({
+    rows: [['BSS002MWHN, BSS002MVLF', '2026-06-01', '2026-07-01', 1250.5]],
+  })
+  t.after(async () => {
+    await rm(fixture.directory, {recursive: true, force: true})
+  })
+
+  const connector = new SmnprConnector()
+  const sourcePointIds = await connector.discoverSourcePointIds({
+    sourceFile: fixture.filePath,
+  })
+  const outputs = await Promise.all(
+    sourcePointIds.map(async (sourcePointId) =>
+      connector.run(connectorContext(fixture.filePath, sourcePointId)),
+    ),
+  )
+  const distributedValues = outputs.map(
+    (output) => output.data.metrics[0]?.values[0]?.value,
+  )
+
+  assert.deepEqual(sourcePointIds, ['BSS002MWHN', 'BSS002MVLF'])
+  assert.deepEqual(distributedValues, [625.25, 625.25])
+  assert.equal(
+    distributedValues.reduce((sum, value) => sum + (value ?? 0), 0),
+    1250.5,
+  )
+})
+
 void test('le connecteur exige les quatre colonnes SMNPR dans le bon ordre', async (t) => {
   const fixture = await createWorkbookFixture({
     headers: [...EXPECTED_HEADERS].toReversed(),

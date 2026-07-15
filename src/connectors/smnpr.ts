@@ -32,6 +32,7 @@ const EXPECTED_HEADERS = [
   VOLUME_COLUMN,
 ] as const
 const BSS_ID_PATTERN = /^BSS[A-Z\d]+$/v
+const SOURCE_POINT_SEPARATOR_PATTERN = /[,;\n]+/v
 
 type SmnprRowInput = SpreadsheetRow & {
   id_point_de_prelevement_ou_rejet?: string | number
@@ -67,6 +68,26 @@ function validateHeaders(headers: string[]): void {
   }
 }
 
+function parseSourcePointIds(value: unknown): string[] {
+  const sourcePointIds = [
+    ...new Set(
+      (getSpreadsheetCellText(value) ?? '')
+        .split(SOURCE_POINT_SEPARATOR_PATTERN)
+        .map((sourcePointId) => sourcePointId.trim().toLocaleUpperCase('fr-FR'))
+        .filter(Boolean),
+    ),
+  ]
+
+  if (
+    sourcePointIds.length === 0 ||
+    sourcePointIds.some((sourcePointId) => !BSS_ID_PATTERN.test(sourcePointId))
+  ) {
+    return []
+  }
+
+  return sourcePointIds
+}
+
 function parseRows(rows: SmnprRowInput[]): SmnprRecord[] {
   if (rows.length === 0) {
     throw new Error(`[${CONNECTOR_NAME}] Le fichier ne contient aucune donnée.`)
@@ -77,14 +98,12 @@ function parseRows(rows: SmnprRowInput[]): SmnprRecord[] {
 
   for (const [index, row] of rows.entries()) {
     const rowNumber = index + 2
-    const sourcePointId = getSpreadsheetCellText(
-      row[SOURCE_POINT_COLUMN],
-    )?.toLocaleUpperCase('fr-FR')
+    const sourcePointIds = parseSourcePointIds(row[SOURCE_POINT_COLUMN])
     const dateStart = parseDeclarationDate(row[DATE_START_COLUMN])
     const dateEnd = parseDeclarationDate(row[DATE_END_COLUMN])
     const value = parseDeclarationNumber(row[VOLUME_COLUMN])
 
-    if (!sourcePointId || !BSS_ID_PATTERN.test(sourcePointId)) {
+    if (sourcePointIds.length === 0) {
       throw new Error(
         `[${CONNECTOR_NAME}] Ligne ${rowNumber} : code BSS invalide.`,
       )
@@ -108,20 +127,29 @@ function parseRows(rows: SmnprRowInput[]): SmnprRecord[] {
       )
     }
 
-    const periodKey = [
-      normalizePointIdentifier(sourcePointId),
-      dateStart.toISOString(),
-      dateEnd.toISOString(),
-    ].join('__')
+    const distributedValue = value / sourcePointIds.length
 
-    if (seenPeriods.has(periodKey)) {
-      throw new Error(
-        `[${CONNECTOR_NAME}] Ligne ${rowNumber} : cette période est déjà déclarée pour le point ${sourcePointId}.`,
-      )
+    for (const sourcePointId of sourcePointIds) {
+      const periodKey = [
+        normalizePointIdentifier(sourcePointId),
+        dateStart.toISOString(),
+        dateEnd.toISOString(),
+      ].join('__')
+
+      if (seenPeriods.has(periodKey)) {
+        throw new Error(
+          `[${CONNECTOR_NAME}] Ligne ${rowNumber} : cette période est déjà déclarée pour le point ${sourcePointId}.`,
+        )
+      }
+
+      seenPeriods.add(periodKey)
+      records.push({
+        sourcePointId,
+        dateStart,
+        dateEnd,
+        value: distributedValue,
+      })
     }
-
-    seenPeriods.add(periodKey)
-    records.push({sourcePointId, dateStart, dateEnd, value})
   }
 
   return records
