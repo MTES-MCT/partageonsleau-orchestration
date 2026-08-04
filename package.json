@@ -14,7 +14,7 @@
     "start": "node dist/index.js",
     "dev": "node --env-file=.env --watch --import tsx index.ts",
     "replay:declaration": "node --import tsx scripts/replay-declaration.ts",
-    "test": "node --import tsx --test --test-isolation=none src/connectors/smnpr.test.ts src/jobs/process-declaration.test.ts"
+    "test": "node --import tsx --test --test-isolation=none src/connectors/smnpr.test.ts src/connectors/template_file.test.ts src/jobs/process-declaration.test.ts"
   },
   "engines": {
     "node": ">= 24 < 25"
