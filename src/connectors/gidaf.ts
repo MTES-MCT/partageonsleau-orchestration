@@ -110,6 +110,51 @@ const GIDAF_DATE_FORMATS = [
   'YYYY-MM-DD HH:mm',
 ]
 
+const GIDAF_MONTH_BY_NAME = new Map<string, number>([
+  ['jan', 0],
+  ['janv', 0],
+  ['janvier', 0],
+  ['january', 0],
+  ['feb', 1],
+  ['fev', 1],
+  ['fevr', 1],
+  ['fevrier', 1],
+  ['february', 1],
+  ['mar', 2],
+  ['mars', 2],
+  ['march', 2],
+  ['apr', 3],
+  ['avr', 3],
+  ['avril', 3],
+  ['april', 3],
+  ['mai', 4],
+  ['may', 4],
+  ['jun', 5],
+  ['juin', 5],
+  ['june', 5],
+  ['jul', 6],
+  ['juil', 6],
+  ['juillet', 6],
+  ['july', 6],
+  ['aou', 7],
+  ['aout', 7],
+  ['aug', 7],
+  ['august', 7],
+  ['sep', 8],
+  ['sept', 8],
+  ['septembre', 8],
+  ['september', 8],
+  ['oct', 9],
+  ['octobre', 9],
+  ['october', 9],
+  ['nov', 10],
+  ['novembre', 10],
+  ['november', 10],
+  ['dec', 11],
+  ['decembre', 11],
+  ['december', 11],
+])
+
 // Numeric GIDAF cells like "2025" are not valid Excel dates for 2025.
 const MIN_GIDAF_EXCEL_SERIAL_DATE = new Date('2000-01-01T00:00:00.000Z')
 
@@ -276,6 +321,61 @@ function dateFromExcelSerial(value: number): Date | undefined {
     : undefined
 }
 
+function parseGidafYear(yearText: string): number | undefined {
+  const parsedYear = Number(yearText)
+  const year = yearText.length === 2 ? 2000 + parsedYear : parsedYear
+
+  return Number.isInteger(year) && year >= 2000 && year <= 2100
+    ? year
+    : undefined
+}
+
+function parseMonthYear(value: string): Date | undefined {
+  const normalized = stripDiacritics(value).toLowerCase().trim()
+  const numericMatch =
+    /^(0?[1-9]|1[0-2])(?:\s*-\s*|\s*\/\s*)(\d{2}|\d{4})$/v.exec(normalized)
+
+  if (numericMatch) {
+    const monthText = numericMatch[1]
+    const yearText = numericMatch[2]
+
+    if (!monthText || !yearText) {
+      return undefined
+    }
+
+    const year = parseGidafYear(yearText)
+
+    return year === undefined
+      ? undefined
+      : new Date(Date.UTC(year, Number(monthText) - 1, 1))
+  }
+
+  const match = /^([a-z]+)\.?(?:\s*-\s*|\s*\/\s*|\s+)(\d{2}|\d{4})$/v.exec(
+    normalized,
+  )
+
+  if (!match) {
+    return undefined
+  }
+
+  const monthName = match[1]
+  const yearText = match[2]
+
+  if (!monthName || !yearText) {
+    return undefined
+  }
+
+  const month = GIDAF_MONTH_BY_NAME.get(monthName)
+
+  if (month === undefined) {
+    return undefined
+  }
+
+  const year = parseGidafYear(yearText)
+
+  return year === undefined ? undefined : new Date(Date.UTC(year, month, 1))
+}
+
 function readAsDate(
   sheet: WorkSheet,
   rowIndex: number,
@@ -301,6 +401,18 @@ function readAsDate(
     return undefined
   }
 
+  // GIDAF attend un mois précis. Une année seule n'est pas une période
+  // mensuelle et ne doit pas être interprétée comme le mois de janvier.
+  if (/^\d{4}$/v.test(text.trim())) {
+    return undefined
+  }
+
+  const parsedMonth = parseMonthYear(text)
+
+  if (parsedMonth) {
+    return parsedMonth
+  }
+
   const parsedDate = moment.utc(text, GIDAF_DATE_FORMATS, true)
 
   if (parsedDate.isValid()) {
@@ -313,6 +425,10 @@ function readAsDate(
 
 function startOfMonth(date: Date): Date {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1))
+}
+
+function startOfNextMonth(date: Date): Date {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1))
 }
 
 function getPointFlowType(
@@ -666,10 +782,20 @@ function extractPrelevementRows(
       columnMap,
       'pointSurveillance',
     )
-    const dateEnd = readMappedDate(sheet, rowIndex, columnMap, 'dateMesure')
+    const measurementMonth = readMappedDate(
+      sheet,
+      rowIndex,
+      columnMap,
+      'dateMesure',
+    )
     const value = readMappedNumber(sheet, rowIndex, columnMap, 'volume')
 
-    if (!pointSurveillance || !dateEnd || value === undefined || value < 0) {
+    if (
+      !pointSurveillance ||
+      !measurementMonth ||
+      value === undefined ||
+      value < 0
+    ) {
       continue
     }
 
@@ -698,8 +824,8 @@ function extractPrelevementRows(
         }) ?? cadre?.sourcePointId,
       pointSurveillance,
       flowType,
-      dateStart: startOfMonth(dateEnd),
-      dateEnd,
+      dateStart: startOfMonth(measurementMonth),
+      dateEnd: startOfNextMonth(measurementMonth),
       value,
     })
   }
