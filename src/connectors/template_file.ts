@@ -63,6 +63,7 @@ const VOLUME_COLUMNS = [
   {name: 'volume_rejete_m3', flowType: PointFlowType.REJET},
 ] as const
 const USAGE_COLUMN = 'usage'
+const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000
 
 const SANDRE_WATER_USE_CODES = [
   '0',
@@ -145,6 +146,33 @@ const LEGACY_USAGE_TO_SANDRE_CODE: Readonly<Record<string, WaterUseCode>> = {
   DOMESTIQUE: '17',
 }
 
+/**
+ * Les colonnes date_debut/date_fin du template portent un jour civil, jamais
+ * un horaire. Selon le fuseau du processus, xlsx peut toutefois convertir une
+ * cellule Excel en un instant proche de la veille au soir (par exemple 22:59
+ * en hiver ou 21:59 en été). On neutralise d'abord le fuseau appliqué par xlsx
+ * aux cellules Date, puis on arrondit au minuit UTC le plus proche. Les chaînes
+ * et numéros déjà interprétés en UTC ne sont pas décalés. Le parseur partagé,
+ * qui sert aussi à des connecteurs réellement horodatés, reste inchangé.
+ */
+export function normalizeTemplateDateOnly(rawDate: unknown): Date | undefined {
+  const parsedDate = parseDeclarationDate(rawDate)
+
+  if (!parsedDate) {
+    return undefined
+  }
+
+  const timezoneNeutralTimestamp =
+    rawDate instanceof Date
+      ? parsedDate.getTime() - parsedDate.getTimezoneOffset() * 60 * 1000
+      : parsedDate.getTime()
+
+  return new Date(
+    Math.round(timezoneNeutralTimestamp / MILLISECONDS_PER_DAY) *
+      MILLISECONDS_PER_DAY,
+  )
+}
+
 function getSourcePointId(row: TemplateFileRowInput): string | undefined {
   for (const column of ID_COLUMNS) {
     const value = row[column]
@@ -180,8 +208,8 @@ function parseTemplateVolumeRow(
   row: TemplateFileRowInput,
 ): TemplateFileRawRow | undefined {
   const sourcePointId = getSourcePointId(row)
-  const dateStart = parseDeclarationDate(row[DATE_START_COLUMN])
-  const dateEnd = parseDeclarationDate(row[DATE_END_COLUMN])
+  const dateStart = normalizeTemplateDateOnly(row[DATE_START_COLUMN])
+  const dateEnd = normalizeTemplateDateOnly(row[DATE_END_COLUMN])
   const usage = parseTemplateUsageCode(row[USAGE_COLUMN])
   const populatedVolumeColumns = VOLUME_COLUMNS.flatMap((column) => {
     const value = parseDeclarationNumber(row[column.name])
