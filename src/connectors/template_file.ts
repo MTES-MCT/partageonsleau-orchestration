@@ -18,6 +18,7 @@ import {
   parseDeclarationNumber,
   readSpreadsheetSheet,
 } from './spreadsheet.js'
+import {resolveTemplateWaterUse} from './template_file_water_uses.js'
 
 type TemplateFileRowInput = Record<string, unknown> & {
   id_point_de_prelevement?: string | number
@@ -40,6 +41,7 @@ type TemplateFileRawRow = {
   periodEnd: Date
   granularity: Granularity
   value: number
+  unknownUsageValue?: string
 }
 
 type TemplateFileFetchResult = {
@@ -66,87 +68,6 @@ const VOLUME_COLUMNS = [
 ] as const
 const USAGE_COLUMN = 'usage'
 const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000
-
-const SANDRE_WATER_USE_CODES = [
-  '0',
-  '1',
-  '2',
-  '2A',
-  '2B',
-  '2C',
-  '2D',
-  '2E',
-  '2F',
-  '3',
-  '3A',
-  '3B',
-  '4',
-  '4A',
-  '4B',
-  '4C',
-  '4D',
-  '5',
-  '5A',
-  '5B',
-  '6',
-  '6A',
-  '6B',
-  '6C',
-  '6C1',
-  '6C2',
-  '6C3',
-  '6D',
-  '7',
-  '7A',
-  '7B',
-  '7C',
-  '7D',
-  '7E',
-  '8',
-  '9',
-  '9A',
-  '9B',
-  '10',
-  '11',
-  '12',
-  '12A',
-  '12B',
-  '12C',
-  '12D',
-  '12E',
-  '13',
-  '13A',
-  '13B',
-  '14',
-  '15',
-  '16',
-  '17',
-] as const
-
-const SANDRE_WATER_USE_CODE_SET: ReadonlySet<string> = new Set(
-  SANDRE_WATER_USE_CODES,
-)
-
-const LEGACY_USAGE_TO_SANDRE_CODE: Readonly<Record<string, WaterUseCode>> = {
-  INCONNU: '0',
-  PAS_D_USAGE: '1',
-  IRRIGATION: '2',
-  AGRICULTURE_ELEVAGE: '3',
-  AQUACULTURE: '3B',
-  INDUSTRIE: '4',
-  AEP: '5',
-  ENERGIE: '6',
-  LOISIRS: '7',
-  EMBOUTEILLAGE: '8',
-  THERMALISME_THALASSO: '9',
-  DEFENSE_INCENDIE: '10',
-  REALIMENTATION_EAU: '12',
-  CANAUX: '13',
-  ETIAGE: '14',
-  ENTRETIEN_VOIRIES: '15',
-  ALIMENTATION_SOUTIEN_CANAL: '16',
-  DOMESTIQUE: '17',
-}
 
 /**
  * Les colonnes date_debut/date_fin du template portent un jour civil, jamais
@@ -236,31 +157,13 @@ function getSourcePointId(row: TemplateFileRowInput): string | undefined {
   return undefined
 }
 
-function parseTemplateUsageCode(rawUsage: unknown): WaterUseCode | undefined {
-  if (typeof rawUsage !== 'string' && typeof rawUsage !== 'number') {
-    return undefined
-  }
-
-  const usage = String(rawUsage).trim().toLocaleUpperCase('fr-FR')
-
-  if (!usage) {
-    return undefined
-  }
-
-  if (SANDRE_WATER_USE_CODE_SET.has(usage)) {
-    return usage
-  }
-
-  return LEGACY_USAGE_TO_SANDRE_CODE[usage]
-}
-
 function parseTemplateVolumeRow(
   row: TemplateFileRowInput,
 ): TemplateFileRawRow | undefined {
   const sourcePointId = getSourcePointId(row)
   const dateStart = normalizeTemplateDateOnly(row[DATE_START_COLUMN])
   const dateEnd = normalizeTemplateDateOnly(row[DATE_END_COLUMN])
-  const usage = parseTemplateUsageCode(row[USAGE_COLUMN])
+  const usageResolution = resolveTemplateWaterUse(row[USAGE_COLUMN])
   const populatedVolumeColumns = VOLUME_COLUMNS.flatMap((column) => {
     const value = parseDeclarationNumber(row[column.name])
 
@@ -289,12 +192,15 @@ function parseTemplateVolumeRow(
     sourcePointId,
     flowType: volume.flowType,
     metricType: MetricType.VOLUME,
-    usage,
+    usage: usageResolution.code,
     dateStart,
     dateEnd,
     periodEnd: getExclusiveTemplatePeriodEnd(dateEnd),
     granularity: inferTemplateGranularity(dateStart, dateEnd),
     value: volume.value,
+    ...(usageResolution.status === 'unknown'
+      ? {unknownUsageValue: usageResolution.rawValue}
+      : {}),
   }
 }
 
@@ -417,6 +323,20 @@ export class TemplateFileConnector extends BaseConnector<
       (row) => row.dateStart.getTime() > startDate.getTime(),
     )
 
+    const unknownUsageValues = [
+      ...new Set(
+        records.flatMap((row) =>
+          row.unknownUsageValue ? [row.unknownUsageValue] : [],
+        ),
+      ),
+    ]
+
+    if (unknownUsageValues.length > 0) {
+      console.warn(
+        `[${this.name}] Usage(s) non reconnu(s) pour le point "${context.sourcePointId}", classé(s) en usage inconnu (0): ${unknownUsageValues.map((value) => `"${value}"`).join(', ')}`,
+      )
+    }
+
     console.log(
       `[${this.name}] Matched records=${records.length}, sourcePointId="${context.sourcePointId}"`,
     )
@@ -476,6 +396,13 @@ export class TemplateFileConnector extends BaseConnector<
       parsedData.records,
       (record) => record.dateEnd,
     )
+    const unknownUsageValues = [
+      ...new Set(
+        parsedData.records.flatMap((record) =>
+          record.unknownUsageValue ? [record.unknownUsageValue] : [],
+        ),
+      ),
+    ]
 
     return {
       id_point_de_prelevement: context.sourcePointId,
@@ -487,6 +414,14 @@ export class TemplateFileConnector extends BaseConnector<
         provider: 'template_file',
         sheet_name: TEMPLATE_SHEET_NAME,
         row_count: parsedData.records.length,
+        ...(unknownUsageValues.length > 0
+          ? {
+              unknown_usage_count: parsedData.records.filter(
+                (record) => record.unknownUsageValue,
+              ).length,
+              unknown_usage_values: unknownUsageValues,
+            }
+          : {}),
       },
       min_date: minDate,
       max_date: maxDate,
