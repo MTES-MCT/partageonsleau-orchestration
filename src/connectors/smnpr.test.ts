@@ -71,7 +71,14 @@ void test('les utilitaires partagés préservent le parser template', async (t) 
 
   assert.equal(output.connector, 'template_file')
   assert.equal(metric?.values.length, 1)
-  assert.equal(metric?.conflictPolicy, ConflictPolicy.SKIP_CONFLICTING_VALUES)
+  assert.equal(
+    metric?.conflictPolicy,
+    ConflictPolicy.REPLACE_EXISTING_EXCEPT_WILLIE,
+  )
+  assert.equal(
+    metric?.values[0]?.periodEnd?.toISOString(),
+    '2026-07-02T00:00:00.000Z',
+  )
 })
 
 void test('le connecteur découvre les BSS et produit les volumes par période', async (t) => {
