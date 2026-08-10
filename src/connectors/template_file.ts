@@ -37,6 +37,8 @@ type TemplateFileRawRow = {
   usage?: WaterUseCode
   dateStart: Date
   dateEnd: Date
+  periodEnd: Date
+  granularity: Granularity
   value: number
 }
 
@@ -173,6 +175,54 @@ export function normalizeTemplateDateOnly(rawDate: unknown): Date | undefined {
   )
 }
 
+export function getExclusiveTemplatePeriodEnd(dateEnd: Date): Date {
+  return new Date(dateEnd.getTime() + MILLISECONDS_PER_DAY)
+}
+
+function getUtcMonthIndex(date: Date): number {
+  return date.getUTCFullYear() * 12 + date.getUTCMonth()
+}
+
+export function inferTemplateGranularity(
+  dateStart: Date,
+  inclusiveDateEnd: Date,
+): Granularity {
+  const periodEnd = getExclusiveTemplatePeriodEnd(inclusiveDateEnd)
+  const durationDays =
+    (periodEnd.getTime() - dateStart.getTime()) / MILLISECONDS_PER_DAY
+  const startsOnFirstDay = dateStart.getUTCDate() === 1
+  const endsBeforeFirstDay = periodEnd.getUTCDate() === 1
+  const monthCount = getUtcMonthIndex(periodEnd) - getUtcMonthIndex(dateStart)
+
+  if (
+    startsOnFirstDay &&
+    endsBeforeFirstDay &&
+    dateStart.getUTCMonth() === 0 &&
+    monthCount === 12
+  ) {
+    return Granularity.YEAR
+  }
+
+  if (
+    startsOnFirstDay &&
+    endsBeforeFirstDay &&
+    dateStart.getUTCMonth() % 3 === 0 &&
+    monthCount === 3
+  ) {
+    return Granularity.QUARTER
+  }
+
+  if (startsOnFirstDay && endsBeforeFirstDay && monthCount === 1) {
+    return Granularity.MONTH
+  }
+
+  if (durationDays === 7) {
+    return Granularity.WEEK
+  }
+
+  return Granularity.DAY
+}
+
 function getSourcePointId(row: TemplateFileRowInput): string | undefined {
   for (const column of ID_COLUMNS) {
     const value = row[column]
@@ -229,7 +279,7 @@ function parseTemplateVolumeRow(
     !sourcePointId ||
     !dateStart ||
     !dateEnd ||
-    dateEnd.getTime() <= dateStart.getTime() ||
+    dateEnd.getTime() < dateStart.getTime() ||
     !volume
   ) {
     return undefined
@@ -242,6 +292,8 @@ function parseTemplateVolumeRow(
     usage,
     dateStart,
     dateEnd,
+    periodEnd: getExclusiveTemplatePeriodEnd(dateEnd),
+    granularity: inferTemplateGranularity(dateStart, dateEnd),
     value: volume.value,
   }
 }
@@ -253,8 +305,7 @@ export class TemplateFileConnector extends BaseConnector<
   private static readonly connectorEnabledDate = new Date('2026-01-01')
   private static readonly metric = {
     type: MetricType.VOLUME,
-    granularity: Granularity.DAY,
-    conflictPolicy: ConflictPolicy.SKIP_CONFLICTING_VALUES,
+    conflictPolicy: ConflictPolicy.REPLACE_EXISTING_EXCEPT_WILLIE,
     unit: MetricUnit.M3,
   } as const
 
@@ -382,22 +433,24 @@ export class TemplateFileConnector extends BaseConnector<
       {
         type: MetricType
         usage: WaterUseCode | undefined
+        granularity: Granularity
         values: TimeserieValue[]
       }
     >()
 
     for (const record of parsedData.records) {
-      const key = `${record.metricType}__${record.usage ?? 'NO_USAGE'}`
+      const key = `${record.metricType}__${record.usage ?? 'NO_USAGE'}__${record.granularity}`
       const group = byTypeAndUsage.get(key) ?? {
         type: record.metricType,
         usage: record.usage,
+        granularity: record.granularity,
         values: [],
       }
 
       group.values.push({
         date: record.dateEnd,
         periodStart: record.dateStart,
-        periodEnd: record.dateEnd,
+        periodEnd: record.periodEnd,
         value: record.value,
       })
 
@@ -405,10 +458,10 @@ export class TemplateFileConnector extends BaseConnector<
     }
 
     const metrics = [...byTypeAndUsage.values()].map(
-      ({type, usage, values}) => ({
+      ({type, usage, granularity, values}) => ({
         type,
         ...(usage ? {usage} : {}),
-        granularity: TemplateFileConnector.metric.granularity,
+        granularity,
         conflictPolicy: TemplateFileConnector.metric.conflictPolicy,
         values,
         unit: TemplateFileConnector.metric.unit,
