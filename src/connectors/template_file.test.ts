@@ -10,9 +10,46 @@ import {
   normalizeTemplateDateOnly,
   TemplateFileConnector,
 } from './template_file.js'
+import {resolveTemplateWaterUse} from './template_file_water_uses.js'
 import {ConflictPolicy, Granularity} from './types.js'
 
 const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000
+
+const HISTORICAL_TEMPLATE_USAGE_CASES = [
+  ['INCONNU', '0'],
+  ["PAS D'USAGE", '1'],
+  ['IRRIGATION', '2'],
+  ['Irrigation par aspersion', '2A'],
+  ['Irrigation gravitaire', '2B'],
+  ['Irrigation au goutte à goutte', '2C'],
+  ['Irrigation par tout autre procédé', '2D'],
+  ['Lutte antigel de cultures pérennes', '2E'],
+  ['AGRICULTURE-ELEVAGE (hors irrigation)', '3'],
+  ['Abreuvage', '3A'],
+  ['Aquaculture', '3B'],
+  ['INDUSTRIE', '4'],
+  ['Agro-alimentaire', '4A'],
+  ['Industrie hors agro-alimentaire', '4B'],
+  ['Exhaure', '4C'],
+  ['Refroidissement (> 99% de restitution)', '4D'],
+  ['AEP', '5'],
+  ['Alimentation collective', '5A'],
+  ['Alimentation individuelle', '5B'],
+  ['ENERGIE', '6'],
+  ['Pompe à chaleur', '6A'],
+  ['Géothermie', '6B'],
+  ["Refroidissement de centrales de production d'énergie", '6C'],
+  ['Refroidissement de centrales thermiques', '6C1'],
+  ['Refroidissement de centrales nucléaires', '6C2'],
+  ['Refroidissement des centrales de production électrique', '6C3'],
+  ['Barrages hydro-électriques (force motrice)', '6D'],
+  ['LOISIRS', '7'],
+  ['Piscine', '7A'],
+  ['Baignade', '7B'],
+  ['Autres activités de loisir', '7C'],
+  ['Arrosage (activités de loisir)', '7D'],
+  ['Canon à neige', '7E'],
+] as const
 
 function withTimezone(timezone: string, callback: () => void): void {
   const previousTimezone = process.env.TZ
@@ -111,6 +148,53 @@ void test('deduit la granularite de la periode civile', () => {
   )
 })
 
+void test('associe tous les libelles du modele historique aux codes SANDRE', () => {
+  for (const [label, expectedCode] of HISTORICAL_TEMPLATE_USAGE_CASES) {
+    assert.deepEqual(resolveTemplateWaterUse(label), {
+      code: expectedCode,
+      status: 'matched',
+    })
+  }
+})
+
+void test('accepte les codes prefixes et normalise les variantes typographiques', () => {
+  assert.deepEqual(
+    resolveTemplateWaterUse(
+      '4D - Refroidissement avec restitution supérieure à 99 %',
+    ),
+    {code: '4D', status: 'matched'},
+  )
+  assert.deepEqual(
+    resolveTemplateWaterUse(' refroidissement (> 99 % de restitution) '),
+    {code: '4D', status: 'matched'},
+  )
+  assert.deepEqual(resolveTemplateWaterUse('6c2'), {
+    code: '6C2',
+    status: 'matched',
+  })
+})
+
+void test('distingue une cellule vide d un libelle inconnu', () => {
+  assert.deepEqual(resolveTemplateWaterUse(''), {
+    code: undefined,
+    status: 'empty',
+  })
+  assert.deepEqual(resolveTemplateWaterUse(undefined), {
+    code: undefined,
+    status: 'empty',
+  })
+  assert.deepEqual(resolveTemplateWaterUse('Usage fournisseur non référencé'), {
+    code: '0',
+    status: 'unknown',
+    rawValue: 'Usage fournisseur non référencé',
+  })
+  assert.deepEqual(resolveTemplateWaterUse('Soutien d’étiage'), {
+    code: '0',
+    status: 'unknown',
+    rawValue: 'Soutien d’étiage',
+  })
+})
+
 void test('produit des periodes semi-ouvertes et remplace les donnees hors Willie', async (t) => {
   const temporaryDirectory = await fs.mkdtemp(
     path.join(os.tmpdir(), 'template-file-'),
@@ -123,12 +207,14 @@ void test('produit des periodes semi-ouvertes et remplace les donnees hors Willi
       date_debut: '2026-07-01',
       date_fin: '2026-07-31',
       volume_m3: 310,
+      usage: 'Refroidissement (> 99% de restitution)',
     },
     {
       id_point_de_prelevement: 'POINT-1',
       date_debut: '2026-08-01',
       date_fin: '2026-08-01',
       volume_m3: 10,
+      usage: 'Usage fournisseur non référencé',
     },
   ])
   XLSX.utils.book_append_sheet(workbook, worksheet, 'declaration_de_volume')
@@ -151,6 +237,15 @@ void test('produit des periodes semi-ouvertes et remplace les donnees hors Willi
 
   assert.ok(monthlyMetric)
   assert.ok(dailyMetric)
+  assert.equal(monthlyMetric.usage, '4D')
+  assert.equal(dailyMetric.usage, '0')
+  assert.deepEqual(output.data.source_metadata, {
+    provider: 'template_file',
+    sheet_name: 'declaration_de_volume',
+    row_count: 2,
+    unknown_usage_count: 1,
+    unknown_usage_values: ['Usage fournisseur non référencé'],
+  })
   assert.equal(
     monthlyMetric.conflictPolicy,
     ConflictPolicy.REPLACE_EXISTING_EXCEPT_WILLIE,
