@@ -1,0 +1,313 @@
+name: Deploy (demo) to Scaleway
+
+on:
+  push:
+    branches: ["demo"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-demo-orchestration
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    env:
+      SCW_REGION: ${{ vars.SCW_DEFAULT_REGION }}
+      SCW_REGISTRY_ENDPOINT: ${{ vars.SCW_REGISTRY_ENDPOINT }}
+      SCW_IMAGE_NAME: ${{ vars.SCW_IMAGE_NAME }}
+      SCW_EXPECTED_PROJECT_ID: 8b2f67a8-b474-4596-967f-fe1e0adba1b3
+      SCW_EXPECTED_ORGANIZATION_ID: aae4422f-c198-4638-b9e5-977938791f14
+      SCW_DEMO_NAMESPACE_ID: c90182ec-fb81-4fca-ad36-0e37ce351466
+      SCW_DEMO_REGISTRY_NAMESPACE_ID: 6b7c0bcc-999b-41a8-a790-59691dce2707
+      SCW_DEMO_CONTAINER_ID_ORCHESTRATION: 6ae600a8-979e-4469-9512-6856c4e6edb5
+      SCW_DEMO_PRIVATE_NETWORK_ID: a600027e-6936-4538-acd7-3f2860113fc3
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate demo CI configuration
+        env:
+          SCW_ACCESS_KEY: ${{ secrets.SCW_ACCESS_KEY }}
+          SCW_SECRET_KEY: ${{ secrets.SCW_SECRET_KEY }}
+          SCW_CONFIGURED_PROJECT_ID: ${{ secrets.SCW_DEFAULT_PROJECT_ID }}
+          SCW_CONFIGURED_ORGANIZATION_ID: ${{ secrets.SCW_DEFAULT_ORGANIZATION_ID }}
+        run: |
+          set -euo pipefail
+
+          [[ "$GITHUB_REPOSITORY" == "MTES-MCT/partageonsleau-orchestration" ]] || {
+            echo "::error::Unexpected GitHub repository"
+            exit 1
+          }
+          [[ "$GITHUB_REF_TYPE" == "branch" && "$GITHUB_REF_NAME" == "demo" ]] || {
+            echo "::error::This workflow can only deploy the demo branch"
+            exit 1
+          }
+
+          required_settings=(
+            SCW_ACCESS_KEY
+            SCW_SECRET_KEY
+            SCW_CONFIGURED_PROJECT_ID
+            SCW_CONFIGURED_ORGANIZATION_ID
+            SCW_REGION
+            SCW_REGISTRY_ENDPOINT
+            SCW_IMAGE_NAME
+          )
+
+          for setting in "${required_settings[@]}"; do
+            [[ -n "${!setting:-}" ]] || {
+              echo "::error::Missing GitHub configuration: $setting"
+              exit 1
+            }
+          done
+
+          [[ "$SCW_CONFIGURED_PROJECT_ID" == "$SCW_EXPECTED_PROJECT_ID" ]] || {
+            echo "::error::Unexpected Scaleway project for demo"
+            exit 1
+          }
+          [[ "$SCW_CONFIGURED_ORGANIZATION_ID" == "$SCW_EXPECTED_ORGANIZATION_ID" ]] || {
+            echo "::error::Unexpected Scaleway organization for demo"
+            exit 1
+          }
+          [[ "$SCW_REGION" == "fr-par" ]] || {
+            echo "::error::Unexpected Scaleway region for demo"
+            exit 1
+          }
+          [[ "$SCW_REGISTRY_ENDPOINT" == "rg.fr-par.scw.cloud/partageonsleau-orchestration" ]] || {
+            echo "::error::Unexpected orchestration registry endpoint"
+            exit 1
+          }
+          [[ "$SCW_IMAGE_NAME" == "partageonsleau-orchestration" ]] || {
+            echo "::error::Unexpected orchestration image name"
+            exit 1
+          }
+
+          protected_ids=(
+            bfb37e50-4bd4-42dc-94ca-2064f8b46898
+            fa4179ac-8658-4440-963b-66d669a452d5
+            fa7450e3-06a4-4f0c-a824-2624eb1d8be7
+            0765eab2-269a-4ec6-8cf3-23a8b3a59bea
+          )
+
+          for protected_id in "${protected_ids[@]}"; do
+            [[ "$SCW_DEMO_NAMESPACE_ID" != "$protected_id" \
+              && "$SCW_DEMO_CONTAINER_ID_ORCHESTRATION" != "$protected_id" ]] || {
+              echo "::error::Refusing a testing or production resource"
+              exit 1
+            }
+          done
+
+      - name: Use Node.js 24.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24.x"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npm run check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test --if-present
+        env:
+          NODE_ENV: test
+
+      - name: Check demo Redis certificate
+        run: |
+          set -euo pipefail
+
+          certificate=deploy/certs/demo/redis-ca.pem
+          test -s "$certificate" || {
+            echo "::error::Missing $certificate"
+            exit 1
+          }
+          openssl x509 -in "$certificate" -noout -checkend 86400
+          openssl verify -CAfile "$certificate" "$certificate"
+          openssl x509 \
+            -in "$certificate" \
+            -noout \
+            -ext subjectAltName \
+            | grep -F "IP Address:172.16.12.3"
+
+      - name: Install Scaleway CLI
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/scaleway/scaleway-cli/master/scripts/get.sh \
+            | VERSION=2.58.3 sh
+          scw version
+
+      - name: Validate Scaleway demo resource ownership
+        env:
+          SCW_ACCESS_KEY: ${{ secrets.SCW_ACCESS_KEY }}
+          SCW_SECRET_KEY: ${{ secrets.SCW_SECRET_KEY }}
+          SCW_DEFAULT_PROJECT_ID: ${{ env.SCW_EXPECTED_PROJECT_ID }}
+          SCW_DEFAULT_ORGANIZATION_ID: ${{ env.SCW_EXPECTED_ORGANIZATION_ID }}
+          SCW_DEFAULT_REGION: ${{ env.SCW_REGION }}
+        run: |
+          set -euo pipefail
+
+          namespace="$(scw container namespace get "$SCW_DEMO_NAMESPACE_ID" \
+            region="$SCW_REGION" \
+            -o json)"
+          [[ "$(jq -er '.project_id' <<< "$namespace")" == "$SCW_EXPECTED_PROJECT_ID" \
+            && "$(jq -er '.name' <<< "$namespace")" == "demo-partageons-leau" ]] || {
+            echo "::error::Unexpected demo namespace"
+            exit 1
+          }
+
+          private_network="$(scw vpc private-network get "$SCW_DEMO_PRIVATE_NETWORK_ID" \
+            region="$SCW_REGION" \
+            -o json)"
+          [[ "$(jq -er '.project_id' <<< "$private_network")" == "$SCW_EXPECTED_PROJECT_ID" \
+            && "$(jq -er '.name' <<< "$private_network")" == "partageonsleau-demo-pn" \
+            && "$(jq -er '.region' <<< "$private_network")" == "$SCW_REGION" ]] || {
+            echo "::error::Unexpected demo private network"
+            exit 1
+          }
+
+          registry_namespace="$(scw registry namespace get "$SCW_DEMO_REGISTRY_NAMESPACE_ID" \
+            region="$SCW_REGION" \
+            -o json)"
+          [[ "$(jq -er '.project_id' <<< "$registry_namespace")" == "$SCW_EXPECTED_PROJECT_ID" \
+            && "$(jq -er '.name' <<< "$registry_namespace")" == "partageonsleau-orchestration" \
+            && "$(jq -er '.endpoint' <<< "$registry_namespace")" == "$SCW_REGISTRY_ENDPOINT" \
+            && "$(jq -er '.is_public' <<< "$registry_namespace")" == "false" ]] || {
+            echo "::error::Unexpected orchestration registry namespace"
+            exit 1
+          }
+
+          container="$(scw container container get "$SCW_DEMO_CONTAINER_ID_ORCHESTRATION" \
+            region="$SCW_REGION" \
+            -o json)"
+          [[ "$(jq -er '.name' <<< "$container")" == "demo-orchestration" \
+            && "$(jq -er '.namespace_id' <<< "$container")" == "$SCW_DEMO_NAMESPACE_ID" ]] || {
+            echo "::error::Unexpected demo orchestration container"
+            exit 1
+          }
+          for key in \
+            REDIS_URL \
+            PLE_WEBHOOK_SECRET \
+            CLIENT_SECRET \
+            SENTRY_DSN \
+            BULLBOARD_PASSWORD \
+            WILLIE_API_TOKEN \
+            ORANGE_LIVE_OBJECTS_API_KEY; do
+            if ! jq -e --arg key "$key" \
+              '(.secret_environment_variables // {}) | has($key)' \
+              <<< "$namespace" >/dev/null \
+              && ! jq -e --arg key "$key" \
+              '(.secret_environment_variables // {}) | has($key)' \
+              <<< "$container" >/dev/null; then
+              echo "::error::Missing demo orchestration secret: $key"
+              exit 1
+            fi
+          done
+          client_id="$(jq -r '.environment_variables.CLIENT_ID // empty' <<< "$container")"
+          if [[ -z "$client_id" ]]; then
+            client_id="$(jq -r '.environment_variables.CLIENT_ID // empty' <<< "$namespace")"
+          fi
+          [[ "$client_id" == sa_* ]] || {
+            echo "::error::Missing or invalid demo orchestration CLIENT_ID"
+            exit 1
+          }
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Scaleway Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: rg.fr-par.scw.cloud
+          username: nologin
+          password: ${{ secrets.SCW_SECRET_KEY }}
+
+      - name: Build and push demo image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./deploy/Dockerfile
+          platforms: linux/amd64
+          build-args: |
+            ENV_NAME=demo
+          push: true
+          tags: |
+            ${{ env.SCW_REGISTRY_ENDPOINT }}/${{ env.SCW_IMAGE_NAME }}:demo-latest
+            ${{ env.SCW_REGISTRY_ENDPOINT }}/${{ env.SCW_IMAGE_NAME }}:demo-${{ github.sha }}
+          cache-from: type=gha,scope=orchestration-demo
+          cache-to: type=gha,mode=max,scope=orchestration-demo
+
+      - name: Deploy immutable demo image
+        env:
+          SCW_ACCESS_KEY: ${{ secrets.SCW_ACCESS_KEY }}
+          SCW_SECRET_KEY: ${{ secrets.SCW_SECRET_KEY }}
+          SCW_DEFAULT_PROJECT_ID: ${{ env.SCW_EXPECTED_PROJECT_ID }}
+          SCW_DEFAULT_ORGANIZATION_ID: ${{ env.SCW_EXPECTED_ORGANIZATION_ID }}
+          SCW_DEFAULT_REGION: ${{ env.SCW_REGION }}
+        run: |
+          set -euo pipefail
+
+          image_ref="$SCW_REGISTRY_ENDPOINT/$SCW_IMAGE_NAME:demo-${GITHUB_SHA}"
+          [[ "$image_ref" =~ :demo-[0-9a-f]{40}$ ]] || {
+            echo "::error::Refusing a non-demo image tag"
+            exit 1
+          }
+
+          current="$(scw container container get "$SCW_DEMO_CONTAINER_ID_ORCHESTRATION" \
+            region="$SCW_REGION" \
+            -o json)"
+          client_id="$(jq -er '.environment_variables.CLIENT_ID' <<< "$current")"
+          [[ "$client_id" == sa_* ]] || {
+            echo "::error::Missing or invalid demo orchestration CLIENT_ID"
+            exit 1
+          }
+
+          scw container container update "$SCW_DEMO_CONTAINER_ID_ORCHESTRATION" \
+            image="$image_ref" \
+            port=4000 \
+            mvcpu-limit=1000 \
+            memory-limit-bytes=2.048GB \
+            local-storage-limit-bytes=1GB \
+            min-scale=0 \
+            max-scale=5 \
+            timeout=300s \
+            privacy=public \
+            protocol=http1 \
+            https-connection-only=true \
+            sandbox=v2 \
+            scaling-option.concurrent-requests-threshold=10 \
+            private-network-id="$SCW_DEMO_PRIVATE_NETWORK_ID" \
+            environment-variables.CLIENT_ID="$client_id" \
+            environment-variables.PLE_BASE_URL=https://demopartageonsleauc90182ec-demo-prelevement-deau-api.functions.fnc.fr-par.scw.cloud \
+            environment-variables.REDIS_TLS_CA_FILE_PATH=/usr/local/share/ca-certificates/scw-redis-ca.crt \
+            environment-variables.SENTRY_ENV=demo \
+            environment-variables.TZ=Europe/Paris \
+            environment-variables.SENTRY_RELEASE="$GITHUB_SHA" \
+            environment-variables.SENTRY_SERVICE=partageonsleau-orchestration \
+            liveness-probe.http.path=/health \
+            liveness-probe.interval=10s \
+            liveness-probe.timeout=1s \
+            liveness-probe.failure-threshold=30 \
+            region="$SCW_REGION" \
+            --wait
+
+          updated="$(scw container container get "$SCW_DEMO_CONTAINER_ID_ORCHESTRATION" \
+            region="$SCW_REGION" \
+            -o json)"
+          [[ "$(jq -er '.image' <<< "$updated")" == "$image_ref" \
+            && "$(jq -er '.namespace_id' <<< "$updated")" == "$SCW_DEMO_NAMESPACE_ID" \
+            && "$(jq -er '.private_network_id' <<< "$updated")" == "$SCW_DEMO_PRIVATE_NETWORK_ID" \
+            && "$(jq -er '.https_connections_only' <<< "$updated")" == "true" \
+            && "$(jq -er '.port' <<< "$updated")" == "4000" \
+            && "$(jq -er '.environment_variables.CLIENT_ID' <<< "$updated")" == "$client_id" ]] || {
+            echo "::error::Unexpected orchestration deployment result"
+            exit 1
+          }

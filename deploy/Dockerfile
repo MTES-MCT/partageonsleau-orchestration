@@ -31,8 +31,15 @@ COPY --from=builder /app/dist ./dist
 
 ARG ENV_NAME=testing
 
-COPY deploy/certs/${ENV_NAME}/redis-ca.pem /usr/local/share/ca-certificates/scw-redis-ca.crt
-RUN update-ca-certificates
+# A managed Redis CA must belong to the target instance. Never fall back to a
+# certificate copied from another environment.
+COPY deploy/certs /tmp/redis-certs
+RUN set -eu; \
+  redis_ca="/tmp/redis-certs/${ENV_NAME}/redis-ca.pem"; \
+  test -s "$redis_ca"; \
+  install -m 0644 "$redis_ca" /usr/local/share/ca-certificates/scw-redis-ca.crt; \
+  update-ca-certificates; \
+  rm -rf /tmp/redis-certs
 
 EXPOSE 4000
 
