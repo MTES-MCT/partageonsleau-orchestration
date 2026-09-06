@@ -22,11 +22,11 @@ Un second job, `process-declaration`, traite les déclarations déposées sur PL
 - **BullMQ** + **ioredis** — files d’attente et workers
 - **Sentry** (`@sentry/node`, profiling) — erreurs et traces (optionnel via `SENTRY_DSN`)
 - **moment**, **xlsx** — utilitaires métier (ex. traitement de déclarations)
-- **xo** — lint (script `test`)
+- **xo** — lint (script `lint`)
 
 ## Monitoring BullMQ (optionnel)
 
-Le dashboard BullBoard est disponible sur `/admin/queues` si `BULLBOARD_PASSWORD` est renseigne.
+Le dashboard BullBoard est disponible sur `/admin/queues` si `BULLBOARD_PASSWORD` est renseigné.
 
 ## Prérequis
 
@@ -56,15 +56,8 @@ Copier `.env.example` vers `.env` et renseigner les variables.
 | `BULLBOARD_PASSWORD` | Mot de passe pour activer BullBoard (dashboard BullMQ) |
 
 **Mode PLE** : si `PLE_BASE_URL`, `CLIENT_ID` et `CLIENT_SECRET` sont tous renseignés, le client appelle l’API réelle (tokens, déclarants, contextes, `ingest`). Sinon, les réponses sont tirées de `mock_responses.ts` et l’ingestion ne fait qu’un log (pas d’appel HTTP).
-<<<<<<< HEAD
-=======
-- `WILLIE_API_TOKEN`: token Bearer pour l'API Willie
-- `ORANGE_LIVE_OBJECTS_API_KEY`: cle API pour l'API Orange Live Objects
-- `PLE_BASE_URL`: URL de base de l'API Partageons l'eau (optionnel tant que le mode mock est actif)
-- `CLIENT_ID`: identifiant client pour generer le JWT service account
-- `CLIENT_SECRET`: secret client pour generer le JWT service account
-- `BULLBOARD_PASSWORD`: mot de passe pour activer BullBoard (dashboard BullMQ)
->>>>>>> main
+
+**CA Redis des images déployées** : le Dockerfile charge `deploy/certs/${ENV_NAME}/redis-ca.pem` et refuse de construire l’image si ce fichier est absent ou vide. Ce certificat doit provenir de l’instance Redis de l’environnement ciblé, jamais d’un autre environnement. Dans le conteneur, `REDIS_TLS_CA_FILE_PATH` doit pointer vers `/usr/local/share/ca-certificates/scw-redis-ca.crt`.
 
 ## Scripts
 
@@ -73,15 +66,8 @@ Copier `.env.example` vers `.env` et renseigner les variables.
 - `npm run start` — exécution de `dist/index.js` (nécessite un build préalable)
 - `npm run check` — `tsc --noEmit`
 - `npm run lint` / `npm run lint:fix` — xo
-- `npm test` — alias sur le lint xo
+- `npm test` — tests unitaires avec le lanceur de tests Node.js et `tsx`
 
-<<<<<<< HEAD
-## Monitoring BullMQ (optionnel)
-
-Le dashboard BullBoard est disponible sur `/admin/queues` si `BULLBOARD_PASSWORD` est renseigné.
-
-=======
->>>>>>> main
 ## API HTTP
 
 | Méthode | Chemin | Description |
