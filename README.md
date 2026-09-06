@@ -87,13 +87,11 @@ Le dashboard BullBoard est disponible sur `/admin/queues` si `BULLBOARD_PASSWORD
 | Méthode | Chemin | Description |
 |---------|--------|-------------|
 | `GET` | `/health` | Santé du service (`{ ok: true }`) |
-| `POST` | `/jobs/pull-updated-data` | Enfile un job `pull-updated-data` (réponse `202` + `jobId`) |
 | `POST` | `/hooks/declarations` | Webhook PLE : corps `{ "event": "declaration.uploaded", "declarationId": "..." }`, en-tête `X-PLE-Signature` (HMAC-SHA256 hex du corps brut, secret `PLE_WEBHOOK_SECRET`) |
-| `GET` | `/debug-sentry` | Déclenche une erreur de test pour Sentry |
 
 ## Files et planification
 
-- **`pull-updated-data`** : planifié chaque jour à **03:00** (cron `0 0 3 * * *` côté BullMQ). Peut aussi être déclenché via `POST /jobs/pull-updated-data`.
+- **`pull-updated-data`** : planifié chaque jour à **03:00** (cron `0 0 3 * * *` côté BullMQ, sans fuseau explicite). Aucun déclenchement HTTP public ; le scheduler enfile directement le job. Le traitement nécessite un worker actif.
 - **`process-declaration`** : enfilement depuis le webhook déclarations (idempotence par `jobId` dérivé de `declarationId`).
 
 Les workers tournent dans le même processus que le serveur HTTP (concurrence **1** par file).

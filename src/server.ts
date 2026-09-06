@@ -4,7 +4,7 @@ import {Buffer} from 'node:buffer'
 import {type IncomingMessage} from 'node:http'
 import express, {type NextFunction, type Request, type Response} from 'express'
 import {Sentry} from './instrument.js'
-import {addJobProcessDeclaration, addJobPullUpdatedData} from './queues/jobs.js'
+import {addJobProcessDeclaration} from './queues/jobs.js'
 import {closeRedisConnection, waitForRedisConnection} from './queues/redis.js'
 import {startScheduler} from './queues/scheduler.js'
 import {startWorkers} from './queues/workers.js'
@@ -83,23 +83,6 @@ function verifyPleSignature(request: Request): void {
 
 app.get('/health', (_request, response) => {
   response.status(200).json({ok: true})
-})
-
-app.get('/debug-sentry', () => {
-  throw new Error('Sentry test error')
-})
-
-app.post('/jobs/pull-updated-data', async (_request, response, next) => {
-  try {
-    const job = await addJobPullUpdatedData({trigger: 'http'})
-
-    response.status(202).json({
-      ok: true,
-      jobId: job?.id ?? null,
-    })
-  } catch (error) {
-    next(error)
-  }
 })
 
 app.post(
