@@ -1,26 +1,66 @@
-name: Deploy
+name: Deploy (prod) to Scaleway
 
 on:
   push:
-    branches:
-      - testing
-      - prod
+    branches: ["prod"]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: deploy-prod-orchestration
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
 
     env:
+      SCW_REGION: ${{ vars.SCW_DEFAULT_REGION }}
       SCW_REGISTRY_ENDPOINT: ${{ vars.SCW_REGISTRY_ENDPOINT }}
       SCW_IMAGE_NAME: ${{ vars.SCW_IMAGE_NAME }}
-      SCW_DEFAULT_REGION: ${{ vars.SCW_DEFAULT_REGION }}
+      SCW_EXPECTED_PROJECT_ID: 8b2f67a8-b474-4596-967f-fe1e0adba1b3
+      SCW_PROD_NAMESPACE_ID: fa4179ac-8658-4440-963b-66d669a452d5
+      SCW_PROD_CONTAINER_ID: ${{ secrets.SCW_PROD_CONTAINER_ID }}
+      SCW_PROD_PRIVATE_NETWORK_ID: ${{ vars.SCW_PROD_PRIVATE_NETWORK_ID }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Validate prod CI configuration
+        env:
+          SCW_ACCESS_KEY: ${{ secrets.SCW_ACCESS_KEY }}
+          SCW_SECRET_KEY: ${{ secrets.SCW_SECRET_KEY }}
+          SCW_CONFIGURED_PROJECT_ID: ${{ secrets.SCW_DEFAULT_PROJECT_ID }}
+          SCW_CONFIGURED_ORGANIZATION_ID: ${{ secrets.SCW_DEFAULT_ORGANIZATION_ID }}
+        run: |
+          set -euo pipefail
+
+          [[ "$GITHUB_REPOSITORY" == "MTES-MCT/partageonsleau-orchestration" \
+            && "$GITHUB_REF_TYPE" == "branch" && "$GITHUB_REF_NAME" == "prod" ]] || {
+            echo "::error::This workflow can only deploy the prod branch of the orchestration repository"
+            exit 1
+          }
+          for key in SCW_ACCESS_KEY SCW_SECRET_KEY SCW_CONFIGURED_PROJECT_ID \
+            SCW_CONFIGURED_ORGANIZATION_ID SCW_REGION SCW_REGISTRY_ENDPOINT \
+            SCW_IMAGE_NAME SCW_PROD_CONTAINER_ID SCW_PROD_PRIVATE_NETWORK_ID; do
+            [[ -n "${!key:-}" ]] || {
+              echo "::error::Missing GitHub configuration: $key"
+              exit 1
+            }
+          done
+          [[ "$SCW_CONFIGURED_PROJECT_ID" == "$SCW_EXPECTED_PROJECT_ID" \
+            && "$SCW_PROD_CONTAINER_ID" == "0765eab2-269a-4ec6-8cf3-23a8b3a59bea" \
+            && "$SCW_PROD_PRIVATE_NETWORK_ID" == "3a4a5621-4e6a-4195-b202-af3fc351e81c" \
+            && "$SCW_REGION" == "fr-par" \
+            && "$SCW_REGISTRY_ENDPOINT" == "rg.fr-par.scw.cloud/partageonsleau-orchestration" \
+            && "$SCW_IMAGE_NAME" == "partageonsleau-orchestration" ]] || {
+            echo "::error::Unexpected prod resource configuration"
+            exit 1
+          }
 
       - name: Use Node.js 24.x
         uses: actions/setup-node@v4
@@ -28,7 +68,7 @@ jobs:
           node-version: "24.x"
           cache: npm
 
-      - name: Install deps
+      - name: Install dependencies
         run: npm ci
 
       - name: Type check
@@ -38,22 +78,81 @@ jobs:
         run: npm run lint
 
       - name: Test
-        run: npm test --if-present
+        run: npm test
         env:
           NODE_ENV: test
 
-      - name: Select deployment target
+      - name: Install Scaleway CLI
         run: |
-          if [ "$GITHUB_REF_NAME" = "testing" ]; then
-            echo "SCW_CONTAINER_ID=${{ secrets.SCW_TESTING_CONTAINER_ID }}" >> "$GITHUB_ENV"
-            echo "IMAGE_TAG=testing" >> "$GITHUB_ENV"
-          elif [ "$GITHUB_REF_NAME" = "prod" ]; then
-            echo "SCW_CONTAINER_ID=${{ secrets.SCW_PROD_CONTAINER_ID }}" >> "$GITHUB_ENV"
-            echo "IMAGE_TAG=prod" >> "$GITHUB_ENV"
-          else
-            echo "Unsupported branch: $GITHUB_REF_NAME"
+          curl -fsSL https://raw.githubusercontent.com/scaleway/scaleway-cli/master/scripts/get.sh \
+            | VERSION=2.58.3 sh
+          scw version
+
+      - name: Validate Scaleway prod resource ownership
+        env:
+          SCW_ACCESS_KEY: ${{ secrets.SCW_ACCESS_KEY }}
+          SCW_SECRET_KEY: ${{ secrets.SCW_SECRET_KEY }}
+          SCW_DEFAULT_PROJECT_ID: ${{ secrets.SCW_DEFAULT_PROJECT_ID }}
+          SCW_DEFAULT_ORGANIZATION_ID: ${{ secrets.SCW_DEFAULT_ORGANIZATION_ID }}
+          SCW_DEFAULT_REGION: ${{ env.SCW_REGION }}
+        run: |
+          set -euo pipefail
+          namespace="$(scw container namespace get "$SCW_PROD_NAMESPACE_ID" region="$SCW_REGION" -o json)"
+          [[ "$(jq -er '.project_id' <<< "$namespace")" == "$SCW_EXPECTED_PROJECT_ID" \
+            && "$(jq -er '.name' <<< "$namespace")" == "prod-partageons-leau" ]] || {
+            echo "::error::Unexpected prod namespace"
             exit 1
-          fi
+          }
+          network="$(scw vpc private-network get "$SCW_PROD_PRIVATE_NETWORK_ID" region="$SCW_REGION" -o json)"
+          [[ "$(jq -er '.project_id' <<< "$network")" == "$SCW_EXPECTED_PROJECT_ID" \
+            && "$(jq -er '.name' <<< "$network")" == "partageonsleau-prod-pn" \
+            && "$(jq -er '.vpc_id' <<< "$network")" == "cdee708c-cc94-4a7b-a8cd-6307173d38ac" \
+            && "$(jq -er '.region' <<< "$network")" == "$SCW_REGION" ]] || {
+            echo "::error::Unexpected prod private network"
+            exit 1
+          }
+          container="$(scw container container get "$SCW_PROD_CONTAINER_ID" region="$SCW_REGION" -o json)"
+          [[ "$(jq -er '.name' <<< "$container")" == "prod-orchestration" \
+            && "$(jq -er '.namespace_id' <<< "$container")" == "$SCW_PROD_NAMESPACE_ID" ]] || {
+            echo "::error::Unexpected prod orchestration container"
+            exit 1
+          }
+          for key in REDIS_URL PLE_WEBHOOK_SECRET CLIENT_SECRET SENTRY_DSN \
+            BULLBOARD_PASSWORD WILLIE_API_TOKEN ORANGE_LIVE_OBJECTS_API_KEY; do
+            jq -e -s --arg key "$key" '
+              any(.[];
+                ((.secret_environment_variables // {}) | has($key)) or
+                ((.environment_variables[$key] // "") | length > 0)
+              )
+            ' <(printf '%s' "$namespace") <(printf '%s' "$container") >/dev/null || {
+              echo "::error::Missing orchestration configuration: $key"
+              exit 1
+            }
+          done
+
+          tls_identity="$(jq -er '.environment_variables.REDIS_TLS_IDENTITY // .environment_variables.REDIS_HOST_OVERRIDE // empty' <<< "$container")"
+          TLS_CERT_IDENTITY="$tls_identity" node --import tsx --input-type=module <<'NODE'
+          import assert from 'node:assert/strict'
+          import {X509Certificate} from 'node:crypto'
+          import {readFileSync} from 'node:fs'
+          import {getRedisTlsOptions} from './src/queues/redis-url.ts'
+          const pem = readFileSync('deploy/certs/prod/redis-ca.pem', 'utf8')
+          // CI does not need the Redis credentials. Runtime validates the real URL scheme.
+          const options = getRedisTlsOptions(pem, {
+            REDIS_URL: 'rediss://localhost',
+            REDIS_TLS_IDENTITY: process.env.TLS_CERT_IDENTITY,
+          })
+          assert.ok(options?.checkServerIdentity, 'Missing Redis certificate identity')
+          const certificates = [...pem.matchAll(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g)]
+            .map(([value]) => new X509Certificate(value))
+          assert.ok(certificates.length, 'Missing Redis certificates')
+          for (const certificate of certificates) {
+            assert.ok(Date.parse(certificate.validFrom) <= Date.now(), 'Redis certificate not yet valid')
+            assert.ok(Date.parse(certificate.validTo) > Date.now() + 86_400_000, 'Redis certificate expires too soon')
+          }
+          assert.ok(certificates.some(certificate => !options.checkServerIdentity('', certificate.toLegacyObject())), 'Redis certificate identity mismatch')
+          NODE
+          openssl verify -CAfile deploy/certs/prod/redis-ca.pem deploy/certs/prod/redis-ca.pem
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -61,37 +160,120 @@ jobs:
       - name: Login to Scaleway Container Registry
         uses: docker/login-action@v3
         with:
-          registry: ${{ env.SCW_REGISTRY_ENDPOINT }}
+          registry: rg.fr-par.scw.cloud
           username: nologin
           password: ${{ secrets.SCW_SECRET_KEY }}
 
-      - name: Build and push image
+      - name: Build and push prod image
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./deploy/Dockerfile
           platforms: linux/amd64
           build-args: |
-            ENV_NAME=${{ env.IMAGE_TAG }}
+            ENV_NAME=prod
           push: true
           tags: |
-            ${{ env.SCW_REGISTRY_ENDPOINT }}/${{ env.SCW_IMAGE_NAME }}:${{ env.IMAGE_TAG }}
-            ${{ env.SCW_REGISTRY_ENDPOINT }}/${{ env.SCW_IMAGE_NAME }}:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            ${{ env.SCW_REGISTRY_ENDPOINT }}/${{ env.SCW_IMAGE_NAME }}:prod-${{ github.sha }}
+          cache-from: type=gha,scope=orchestration-prod
+          cache-to: type=gha,mode=max,scope=orchestration-prod
 
-      - name: Install Scaleway CLI
-        uses: scaleway/action-scw@v0
-        with:
-          save-config: true
-          export-config: true
-          access-key: ${{ secrets.SCW_ACCESS_KEY }}
-          secret-key: ${{ secrets.SCW_SECRET_KEY }}
-          default-project-id: ${{ secrets.SCW_DEFAULT_PROJECT_ID }}
-          default-organization-id: ${{ secrets.SCW_DEFAULT_ORGANIZATION_ID }}
-
-      - name: Update container image and redeploy
+      - name: Deploy immutable prod image
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          SCW_ACCESS_KEY: ${{ secrets.SCW_ACCESS_KEY }}
+          SCW_SECRET_KEY: ${{ secrets.SCW_SECRET_KEY }}
+          SCW_DEFAULT_PROJECT_ID: ${{ secrets.SCW_DEFAULT_PROJECT_ID }}
+          SCW_DEFAULT_ORGANIZATION_ID: ${{ secrets.SCW_DEFAULT_ORGANIZATION_ID }}
+          SCW_DEFAULT_REGION: ${{ env.SCW_REGION }}
         run: |
-          scw container container update "$SCW_CONTAINER_ID" \
-            image="${SCW_REGISTRY_ENDPOINT}/${SCW_IMAGE_NAME}:${IMAGE_TAG}" \
-            region="$SCW_DEFAULT_REGION"
+          set -euo pipefail
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            echo "::error::Missing immutable image digest"
+            exit 1
+          }
+          image_ref="$SCW_REGISTRY_ENDPOINT/$SCW_IMAGE_NAME@$IMAGE_DIGEST"
+          current="$(scw container container get "$SCW_PROD_CONTAINER_ID" region="$SCW_REGION" -o json)"
+          [[ "$(jq -er '.namespace_id' <<< "$current")" == "$SCW_PROD_NAMESPACE_ID" \
+            && "$(jq -er '.name' <<< "$current")" == "prod-orchestration" ]] || {
+            echo "::error::Prod resource ownership changed before deployment"
+            exit 1
+          }
+          client_id="$(jq -er '.environment_variables.CLIENT_ID' <<< "$current")"
+          ple_base_url="$(jq -er '.environment_variables.PLE_BASE_URL' <<< "$current")"
+          [[ "$client_id" == sa_* && "$ple_base_url" == https://* ]] || {
+            echo "::error::Missing or invalid existing PLE connection configuration"
+            exit 1
+          }
+
+          # Preserve the complete ordinary map; never rewrite write-only secrets.
+          expected_environment="$(jq -c --arg release "$GITHUB_SHA" '
+            (.environment_variables // {}) + {
+              REDIS_TLS_CA_FILE_PATH: "/usr/local/share/ca-certificates/scw-redis-ca.crt",
+              SENTRY_ENV: "prod",
+              TZ: "Europe/Paris",
+              SENTRY_RELEASE: $release,
+              SENTRY_SERVICE: "partageonsleau-orchestration"
+            }
+          ' <<< "$current")"
+          secret_keys_before="$(jq -c '(.secret_environment_variables // {}) | keys | sort' <<< "$current")"
+          settings_filter='{max_scale, mvcpu_limit, memory_limit_bytes, local_storage_limit_bytes, timeout, privacy, protocol, port, https_connections_only, sandbox, scaling_option, liveness_probe}'
+          settings_before="$(jq -c "$settings_filter" <<< "$current")"
+          mapfile -d '' -t environment_args < <(
+            jq -jr 'to_entries[] | "environment-variables.\(.key)=\(.value)\u0000"' <<< "$expected_environment"
+          )
+          # Refuse to redeploy while either orchestration queue has runnable work.
+          # This read-only check does not lock the queues or eliminate later races.
+          printf '%s' "$current" | node --import tsx --input-type=module -e '
+            import {readFileSync} from "node:fs";
+            import {assertRemoteOrchestrationIdle} from "./src/network/deployment-idle.ts";
+            try {
+              const container = JSON.parse(readFileSync(0, "utf8"));
+              await assertRemoteOrchestrationIdle({
+                endpoint: container.public_endpoint,
+                expectedHostname: "prodpartageonsleau02a6cumu-prod-orchestration.functions.fnc.fr-par.scw.cloud",
+                password: container.environment_variables.BULLBOARD_PASSWORD,
+              });
+              console.log("Orchestration queues idle at deployment preflight");
+            } catch {
+              console.error("::error::Orchestration queue preflight failed; deployment refused");
+              process.exitCode = 1;
+            }
+          '
+          scw container container update "$SCW_PROD_CONTAINER_ID" \
+            image="$image_ref" \
+            min-scale=1 \
+            private-network-id="$SCW_PROD_PRIVATE_NETWORK_ID" \
+            "${environment_args[@]}" \
+            region="$SCW_REGION" --wait >/dev/null
+
+          updated="$(scw container container get "$SCW_PROD_CONTAINER_ID" region="$SCW_REGION" -o json)"
+          [[ "$(jq -er '.image' <<< "$updated")" == "$image_ref" \
+            && "$(jq -er '.status' <<< "$updated")" == "ready" \
+            && "$(jq -er '.namespace_id' <<< "$updated")" == "$SCW_PROD_NAMESPACE_ID" \
+            && "$(jq -er '.private_network_id' <<< "$updated")" == "$SCW_PROD_PRIVATE_NETWORK_ID" \
+            && "$(jq -er '.min_scale' <<< "$updated")" == "1" ]] || {
+            echo "::error::Unexpected orchestration deployment result"
+            exit 1
+          }
+          jq -e --argjson expected "$expected_environment" '.environment_variables == $expected' \
+            <<< "$updated" >/dev/null || {
+            echo "::error::Container environment map was not preserved"
+            exit 1
+          }
+          [[ "$(jq -c '(.secret_environment_variables // {}) | keys | sort' <<< "$updated")" == "$secret_keys_before" \
+            && "$(jq -c "$settings_filter" <<< "$updated")" == "$settings_before" ]] || {
+            echo "::error::Container secret names or unrelated settings changed unexpectedly"
+            exit 1
+          }
+          endpoint="$(jq -er '.public_endpoint' <<< "$updated")"
+          curl --fail --silent --show-error --retry 6 --retry-all-errors \
+            --retry-delay 5 --connect-timeout 10 --max-time 30 \
+            "https://${endpoint#https://}/health" >/dev/null
+
+      - name: Publish prod tag after successful deployment
+        env:
+          IMAGE_REF: ${{ env.SCW_REGISTRY_ENDPOINT }}/${{ env.SCW_IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+          PROD_IMAGE_REF: ${{ env.SCW_REGISTRY_ENDPOINT }}/${{ env.SCW_IMAGE_NAME }}:prod
+        run: docker buildx imagetools create --tag "$PROD_IMAGE_REF" "$IMAGE_REF"

@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import {Redis, type RedisOptions} from 'ioredis'
 import * as Sentry from '@sentry/node'
+import {getRedisTlsOptions, readRedisUrl} from './redis-url.js'
 
 const isTest = process.env.NODE_ENV === 'test'
 
@@ -13,7 +14,7 @@ export function getRedisConnection(): Redis {
     return redisConnection
   }
 
-  const url = process.env.REDIS_URL ?? 'redis://localhost:6380'
+  const url = readRedisUrl()
   const redisTlsCaFilePath = process.env.REDIS_TLS_CA_FILE_PATH
 
   const options: RedisOptions = {
@@ -22,13 +23,12 @@ export function getRedisConnection(): Redis {
     lazyConnect: true,
   }
 
-  if (redisTlsCaFilePath) {
-    options.tls = {
-      ca: fs.readFileSync(
-        path.resolve(process.cwd(), redisTlsCaFilePath),
-        'utf8',
-      ),
-    }
+  const ca = redisTlsCaFilePath
+    ? fs.readFileSync(path.resolve(process.cwd(), redisTlsCaFilePath), 'utf8')
+    : undefined
+  const tls = getRedisTlsOptions(ca)
+  if (tls) {
+    options.tls = tls
   }
 
   redisConnection = new Redis(url, options)
