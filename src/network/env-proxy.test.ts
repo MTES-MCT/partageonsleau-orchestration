@@ -17,7 +17,12 @@ async function listen(t: TestContext, server: Server): Promise<number> {
   return address.port
 }
 
-async function fetchInChild(url: string, proxy: string, noProxy = '') {
+async function fetchInChild(
+  url: string,
+  proxy: string,
+  noProxy = '',
+  resolveToLoopback = false,
+) {
   // Node reads proxy configuration at startup. Lower-case variables take
   // precedence, including empty values inherited from the test runner.
   const environment = Object.fromEntries(
@@ -35,8 +40,20 @@ async function fetchInChild(url: string, proxy: string, noProxy = '') {
         '--dns-result-order=ipv4first',
         '--input-type=module',
         '--eval',
-        'const response = await fetch(process.argv[1], {signal: AbortSignal.timeout(3000)}); console.log(await response.text())',
+        `
+          import dns from 'node:dns';
+          if (process.argv[2] === 'loopback') {
+            dns.lookup = (_hostname, options, callback) => {
+              const done = typeof options === 'function' ? options : callback;
+              if (options?.all) done(null, [{address: '127.0.0.1', family: 4}]);
+              else done(null, '127.0.0.1', 4);
+            };
+          }
+          const response = await fetch(process.argv[1], {signal: AbortSignal.timeout(3000)});
+          console.log(await response.text());
+        `,
         url,
+        resolveToLoopback ? 'loopback' : '',
       ],
       {
         env: {
@@ -100,7 +117,7 @@ void test('HTTPS fetch uses HTTPS_PROXY and rejects a denied CONNECT', async (t)
   assert.deepEqual(proxy.requests, ['provider.invalid:443'])
 })
 
-void test('NO_PROXY bypasses only the exact configured host, not a lookalike', async (t) => {
+void test('NO_PROXY bypasses a configured host but not a lookalike', async (t) => {
   let directRequests = 0
   const origin = createServer((_request, response) => {
     directRequests++
@@ -122,6 +139,24 @@ void test('NO_PROXY bypasses only the exact configured host, not a lookalike', a
   )
   assert.equal(directRequests, 1)
   assert.deepEqual(proxy.requests, ['localhost.provider.invalid:80'])
+})
+
+void test('NO_PROXY also bypasses subdomains of a configured host', async (t) => {
+  const origin = createServer((_request, response) => {
+    response.end('direct')
+  })
+  const port = await listen(t, origin)
+  const proxy = await fakeProxy(t)
+  assert.equal(
+    await fetchInChild(
+      `http://child.service.invalid:${port}/data`,
+      proxy.url,
+      'service.invalid',
+      true,
+    ),
+    'direct',
+  )
+  assert.deepEqual(proxy.requests, [])
 })
 
 void test('a refused proxy never falls back to a reachable direct origin', async (t) => {
