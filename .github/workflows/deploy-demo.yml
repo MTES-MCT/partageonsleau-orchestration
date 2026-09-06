@@ -10,7 +10,7 @@ permissions:
 
 concurrency:
   group: deploy-demo-orchestration
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   deploy:
@@ -231,6 +231,7 @@ jobs:
           password: ${{ secrets.SCW_SECRET_KEY }}
 
       - name: Build and push demo image
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -247,6 +248,7 @@ jobs:
 
       - name: Deploy immutable demo image
         env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
           SCW_ACCESS_KEY: ${{ secrets.SCW_ACCESS_KEY }}
           SCW_SECRET_KEY: ${{ secrets.SCW_SECRET_KEY }}
           SCW_DEFAULT_PROJECT_ID: ${{ env.SCW_EXPECTED_PROJECT_ID }}
@@ -255,11 +257,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          image_ref="$SCW_REGISTRY_ENDPOINT/$SCW_IMAGE_NAME:demo-${GITHUB_SHA}"
-          [[ "$image_ref" =~ :demo-[0-9a-f]{40}$ ]] || {
-            echo "::error::Refusing a non-demo image tag"
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            echo "::error::Missing immutable image digest"
             exit 1
           }
+          image_ref="$SCW_REGISTRY_ENDPOINT/$SCW_IMAGE_NAME@$IMAGE_DIGEST"
 
           current="$(scw container container get "$SCW_DEMO_CONTAINER_ID_ORCHESTRATION" \
             region="$SCW_REGION" \
@@ -270,13 +272,31 @@ jobs:
             exit 1
           }
 
+          # Scaleway replaces the environment map: merge all existing ordinary
+          # variables and leave the write-only secret map out of the request.
+          expected_environment="$(jq -c --arg release "$GITHUB_SHA" '
+            (.environment_variables // {}) + {
+              PLE_BASE_URL: "https://demopartageonsleauc90182ec-demo-prelevement-deau-api.functions.fnc.fr-par.scw.cloud",
+              REDIS_TLS_CA_FILE_PATH: "/usr/local/share/ca-certificates/scw-redis-ca.crt",
+              SENTRY_ENV: "demo",
+              TZ: "Europe/Paris",
+              SENTRY_RELEASE: $release,
+              SENTRY_SERVICE: "partageonsleau-orchestration"
+            }
+          ' <<< "$current")"
+          secret_keys_before="$(jq -c '(.secret_environment_variables // {}) | keys | sort' <<< "$current")"
+          mapfile -d '' -t environment_args < <(
+            jq -jr 'to_entries[] | "environment-variables.\(.key)=\(.value)\u0000"' \
+              <<< "$expected_environment"
+          )
+
           scw container container update "$SCW_DEMO_CONTAINER_ID_ORCHESTRATION" \
             image="$image_ref" \
             port=4000 \
             mvcpu-limit=1000 \
             memory-limit-bytes=2.048GB \
             local-storage-limit-bytes=1GB \
-            min-scale=0 \
+            min-scale=1 \
             max-scale=5 \
             timeout=300s \
             privacy=public \
@@ -285,19 +305,13 @@ jobs:
             sandbox=v2 \
             scaling-option.concurrent-requests-threshold=10 \
             private-network-id="$SCW_DEMO_PRIVATE_NETWORK_ID" \
-            environment-variables.CLIENT_ID="$client_id" \
-            environment-variables.PLE_BASE_URL=https://demopartageonsleauc90182ec-demo-prelevement-deau-api.functions.fnc.fr-par.scw.cloud \
-            environment-variables.REDIS_TLS_CA_FILE_PATH=/usr/local/share/ca-certificates/scw-redis-ca.crt \
-            environment-variables.SENTRY_ENV=demo \
-            environment-variables.TZ=Europe/Paris \
-            environment-variables.SENTRY_RELEASE="$GITHUB_SHA" \
-            environment-variables.SENTRY_SERVICE=partageonsleau-orchestration \
+            "${environment_args[@]}" \
             liveness-probe.http.path=/health \
             liveness-probe.interval=10s \
             liveness-probe.timeout=1s \
             liveness-probe.failure-threshold=30 \
             region="$SCW_REGION" \
-            --wait
+            --wait >/dev/null
 
           updated="$(scw container container get "$SCW_DEMO_CONTAINER_ID_ORCHESTRATION" \
             region="$SCW_REGION" \
@@ -307,7 +321,17 @@ jobs:
             && "$(jq -er '.private_network_id' <<< "$updated")" == "$SCW_DEMO_PRIVATE_NETWORK_ID" \
             && "$(jq -er '.https_connections_only' <<< "$updated")" == "true" \
             && "$(jq -er '.port' <<< "$updated")" == "4000" \
+            && "$(jq -er '.min_scale' <<< "$updated")" == "1" \
             && "$(jq -er '.environment_variables.CLIENT_ID' <<< "$updated")" == "$client_id" ]] || {
             echo "::error::Unexpected orchestration deployment result"
+            exit 1
+          }
+          jq -e --argjson expected "$expected_environment" \
+            '.environment_variables == $expected' <<< "$updated" >/dev/null || {
+            echo "::error::Container environment map was not preserved"
+            exit 1
+          }
+          [[ "$(jq -c '(.secret_environment_variables // {}) | keys | sort' <<< "$updated")" == "$secret_keys_before" ]] || {
+            echo "::error::Container secret names changed unexpectedly"
             exit 1
           }
