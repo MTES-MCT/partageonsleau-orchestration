@@ -17,7 +17,7 @@
     "test": "node --import tsx --test --test-isolation=none src/connectors/gidaf.test.ts src/connectors/smnpr.test.ts src/connectors/template_file.test.ts src/jobs/process-declaration.test.ts src/network/env-proxy.test.ts src/queues/redis-url.test.ts"
   },
   "engines": {
-    "node": ">= 24 < 25"
+    "node": ">=24.20.0 <25"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",
