@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import moment from 'moment'
-import * as XLSX from 'xlsx'
+import XLSX from './xlsx.js'
 
 const DECLARATION_DATE_FORMATS = [
   'DD/MM/YYYY',

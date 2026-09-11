@@ -326,7 +326,7 @@ export class OmniscientMurgatConnector extends BaseConnector<
     parsedData: OmniscientParsedResult,
     context: ConnectorRunContext,
   ): Promise<ParsedPointPayload> {
-    const {minDate, maxDate} = this.getMinMaxDates(
+    const {minDate, maxDate: latestDate} = this.getMinMaxDates(
       parsedData.values,
       (value) => value.date,
     )
@@ -346,7 +346,7 @@ export class OmniscientMurgatConnector extends BaseConnector<
         timezone: omniscientTimeZone,
       },
       min_date: minDate,
-      max_date: maxDate,
+      max_date: latestDate,
       metrics: [
         {
           type: OmniscientMurgatConnector.metric.type,

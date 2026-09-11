@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import * as XLSX from 'xlsx'
+import XLSX from './xlsx.js'
 import {
   getExclusiveTemplatePeriodEnd,
   inferTemplateGranularity,
@@ -155,6 +155,29 @@ void test('associe tous les libelles du modele historique aux codes SANDRE', () 
       status: 'matched',
     })
   }
+})
+
+void test('la normalisation des usages préserve les séparateurs et traite les espaces longs sans regex quadratique', () => {
+  for (const separator of ['-', ':', '–', '—']) {
+    assert.deepEqual(resolveTemplateWaterUse(`4D${separator}Refroidissement`), {
+      code: '4D',
+      status: 'matched',
+    })
+    assert.deepEqual(
+      resolveTemplateWaterUse(`4D \t ${separator} \n Refroidissement`),
+      {code: '4D', status: 'matched'},
+    )
+  }
+
+  assert.deepEqual(
+    resolveTemplateWaterUse(
+      `refroidissement (> 99${' '.repeat(100_000)}% de restitution)`,
+    ),
+    {code: '4D', status: 'matched'},
+  )
+  assert.equal(resolveTemplateWaterUse('4D -').status, 'unknown')
+  assert.equal(resolveTemplateWaterUse('999 - Inconnu').status, 'unknown')
+  assert.equal(resolveTemplateWaterUse('4D·Refroidissement').status, 'unknown')
 })
 
 void test('accepte les codes prefixes et normalise les variantes typographiques', () => {

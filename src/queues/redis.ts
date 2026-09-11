@@ -18,7 +18,11 @@ export function getRedisConnection(): Redis {
   const redisTlsCaFilePath = process.env.REDIS_TLS_CA_FILE_PATH
 
   const options: RedisOptions = {
-    retryStrategy: (times: number) => Math.min(15_000, 250 * 2 ** times),
+    protocol: 2,
+    retryStrategy(times: number) {
+      const multiplier = 2 ** times
+      return Math.min(15_000, 250 * multiplier)
+    },
     maxRetriesPerRequest: null,
     lazyConnect: true,
   }
@@ -58,7 +62,9 @@ export async function waitForRedisConnection() {
 
   try {
     await redis.connect()
-  } catch {}
+  } catch {
+    // Another queue may already be connecting; wait for ready/error below.
+  }
 
   if (redis.status === 'ready') {
     return

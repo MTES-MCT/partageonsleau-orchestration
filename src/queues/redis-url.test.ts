@@ -26,7 +26,7 @@ function certificateWithNames(subjectaltname: string): PeerCertificate {
 
 void test('Redis host override is optional and preserves the original string exactly', () => {
   assert.equal(readRedisUrl({}), 'redis://localhost:6380')
-  for (const override of [undefined, '', '   ']) {
+  for (const override of [undefined, '', ' '.repeat(3)]) {
     assert.equal(
       readRedisUrl({REDIS_URL: ORIGINAL_URL, REDIS_HOST_OVERRIDE: override}),
       ORIGINAL_URL,
@@ -216,7 +216,7 @@ void test('explicit TLS identity rejects plaintext, missing or empty trust confi
     )
   }
 
-  for (const ca of [undefined, '', '   ', Buffer.alloc(0)]) {
+  for (const ca of [undefined, '', ' '.repeat(3), Buffer.alloc(0)]) {
     assert.throws(
       () =>
         getRedisTlsOptions(ca, {

@@ -1,6 +1,7 @@
 import path from 'node:path'
 import moment from 'moment'
-import xlsx, {type Range, type WorkSheet} from 'xlsx'
+import {type Range, type WorkSheet} from 'xlsx'
+import xlsx from './xlsx.js'
 import {BaseConnector} from './base-connector.js'
 import {
   ConflictPolicy,
@@ -219,7 +220,7 @@ function scalarToString(value: unknown): string | undefined {
 function stripDiacritics(value: unknown): string {
   return (scalarToString(value) ?? '')
     .normalize('NFD')
-    .replaceAll(/[\u0300-\u036F]/gv, '')
+    .replaceAll(/[\u{300}-\u{36F}]/gv, '')
 }
 
 function normalizeHeader(value: unknown): string {
@@ -232,7 +233,7 @@ function normalizeSpaces(value: unknown): string {
 
 function normalizeSourcePart(value: unknown): string {
   return stripDiacritics(normalizeSpaces(value))
-    .replaceAll(/[^a-zA-Z\d]+/gv, '-')
+    .replaceAll(/[^\dA-Za-z]+/gv, '-')
     .replaceAll(/-+/gv, '-')
     .replaceAll(/^-|-$/gv, '')
     .toLowerCase()
@@ -241,7 +242,7 @@ function normalizeSourcePart(value: unknown): string {
 function normalizeIdentifier(value: string): string {
   return stripDiacritics(value)
     .toLowerCase()
-    .replaceAll(/[^a-z0-9]/gv, '')
+    .replaceAll(/[^0-9a-z]/gv, '')
 }
 
 function readCell(
@@ -290,10 +291,7 @@ function readAsNumber(
     return undefined
   }
 
-  const normalized = cell.value
-    .trim()
-    .replaceAll(/[\s\u00A0\u202F]+/gv, '')
-    .replace(',', '.')
+  const normalized = cell.value.trim().replaceAll(/\s+/gv, '').replace(',', '.')
   const value = Number(normalized)
 
   return Number.isFinite(value) ? value : undefined

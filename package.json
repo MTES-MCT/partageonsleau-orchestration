@@ -5,37 +5,50 @@
   "license": "MIT",
   "author": "Alec de Guillebon",
   "type": "module",
+  "packageManager": "npm@11.19.1",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
     "check": "tsc --noEmit",
-    "lint": "xo",
-    "lint:fix": "xo --fix",
+    "audit": "npm audit --audit-level=low",
+    "lint": "eslint src scripts index.ts eslint.config.mjs && prettier --check \"src/**/*.ts\" \"scripts/**/*.ts\" index.ts eslint.config.mjs",
+    "lint:fix": "eslint --fix src scripts index.ts eslint.config.mjs && prettier --write \"src/**/*.ts\" \"scripts/**/*.ts\" index.ts eslint.config.mjs",
     "start": "node dist/index.js",
     "dev": "node --env-file=.env --watch --import tsx index.ts",
     "replay:declaration": "node --import tsx scripts/replay-declaration.ts",
-    "test": "node --import tsx --test --test-isolation=none src/connectors/gidaf.test.ts src/connectors/smnpr.test.ts src/connectors/template_file.test.ts src/jobs/process-declaration.test.ts src/network/env-proxy.test.ts src/queues/redis-url.test.ts"
+    "test": "node --import tsx --test --test-isolation=none \"src/**/*.test.ts\""
   },
   "engines": {
-    "node": ">=24.20.0 <25"
+    "node": ">=24.21.0 <25",
+    "npm": ">=11.19.1 <12"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true,
+    "@sentry/node-cpu-profiler@2.4.4": true,
+    "msgpackr-extract@3.0.4": true,
+    "fsevents@2.3.3": false
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/express": "^5.0.6",
-    "@types/node": "^24.12.2",
-    "tsx": "^4.21.0",
+    "@types/node": "^24.13.4",
+    "bullmq-v5": "npm:bullmq@5.81.5",
+    "eslint": "^10.10.0",
+    "prettier": "^3.9.6",
+    "tsx": "^4.23.13",
     "typescript": "^6.0.3",
-    "xo": "^2.0.2"
+    "typescript-eslint": "^8.70.0"
   },
   "dependencies": {
-    "@bull-board/api": "^6.14.2",
-    "@bull-board/express": "^6.14.2",
-    "@bull-board/ui": "^6.14.2",
-    "@sentry/node": "^10.50.0",
-    "@sentry/profiling-node": "^10.50.0",
-    "bullmq": "^5.76.1",
+    "@bull-board/api": "^9.10.0",
+    "@bull-board/express": "^9.10.0",
+    "@bull-board/ui": "^9.10.0",
+    "@sentry/node": "^10.74.0",
+    "@sentry/profiling-node": "^10.74.0",
+    "bullmq": "^6.3.4",
     "express": "^5.2.1",
-    "ioredis": "5.10.1",
+    "ioredis": "6.0.0",
     "moment": "^2.30.1",
-    "xlsx": "^0.18.5"
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   }
 }

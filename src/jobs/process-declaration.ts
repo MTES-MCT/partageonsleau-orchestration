@@ -222,7 +222,7 @@ function metricTypeToParameter(metricType: MetricType): string {
 }
 
 function sanitizeFilename(filename: string): string {
-  return path.basename(filename || 'file').replaceAll(/[^\w.\-]+/gv, '_')
+  return path.basename(filename || 'file').replaceAll(/[^\w\-.]+/gv, '_')
 }
 
 export function resolveConnectorName(
@@ -374,7 +374,7 @@ function buildConnectorFileBatches(parameters: {
 function normalizeSourcePointKey(value: string): string {
   return value
     .normalize('NFD')
-    .replaceAll(/[\u0300-\u036F]/gv, '')
+    .replaceAll(/[\u{300}-\u{36F}]/gv, '')
     .trim()
     .replaceAll(/\s+/gv, ' ')
     .toLowerCase()
@@ -496,10 +496,8 @@ function metricToLegacySeries(parameters: {
     .filter((value) => Number.isFinite(value.value))
     .map((value) => ({
       date: toLegacyValueDate(value.date, metric.granularity),
-      ...(value.periodStart
-        ? {periodStart: value.periodStart.toISOString()}
-        : {}),
-      ...(value.periodEnd ? {periodEnd: value.periodEnd.toISOString()} : {}),
+      ...(value.periodStart && {periodStart: value.periodStart.toISOString()}),
+      ...(value.periodEnd && {periodEnd: value.periodEnd.toISOString()}),
       value: value.value,
     }))
 
@@ -507,7 +505,6 @@ function metricToLegacySeries(parameters: {
     return undefined
   }
 
-  // eslint-disable-next-line unicorn/no-array-sort
   const sortedValues = [...values].sort((left, right) =>
     (left.periodStart ?? left.date).localeCompare(
       right.periodStart ?? right.date,
@@ -516,11 +513,11 @@ function metricToLegacySeries(parameters: {
 
   return {
     pointPrelevement: point.name,
-    ...((payload.flow_type ?? point.flowType)
-      ? {flowType: payload.flow_type ?? point.flowType}
-      : {}),
-    ...(metric.usage ? {usage: metric.usage} : {}),
-    ...(payload.source_metadata ? {metadata: payload.source_metadata} : {}),
+    ...((payload.flow_type ?? point.flowType) && {
+      flowType: payload.flow_type ?? point.flowType,
+    }),
+    ...(metric.usage && {usage: metric.usage}),
+    ...(payload.source_metadata && {metadata: payload.source_metadata}),
     parameter: metricTypeToParameter(metric.type),
     unit: metric.unit,
     frequency: metric.granularity,

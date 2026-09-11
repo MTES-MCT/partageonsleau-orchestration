@@ -10,12 +10,10 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
 }
 
 const handlers: Record<string, (job: Job<unknown>) => Promise<void>> = {
-  // eslint-disable-next-line @typescript-eslint/naming-convention
   async 'pull-updated-data'(_job) {
     await pullUpdatedData(connectorRegistry)
   },
 
-  // eslint-disable-next-line @typescript-eslint/naming-convention
   async 'process-declaration'(job) {
     if (!isObjectRecord(job.data)) {
       throw new Error('[process-declaration] Missing declarationId')

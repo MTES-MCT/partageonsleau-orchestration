@@ -13,22 +13,23 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  quality:
+    uses: ./.github/workflows/quality.yml
+
   deploy:
-    runs-on: ubuntu-latest
+    needs: quality
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
 
     env:
       SCW_REGION: ${{ vars.SCW_DEFAULT_REGION }}
       SCW_REGISTRY_ENDPOINT: ${{ vars.SCW_REGISTRY_ENDPOINT }}
       SCW_IMAGE_NAME: ${{ vars.SCW_IMAGE_NAME }}
-      SCW_EXPECTED_PROJECT_ID: 8b2f67a8-b474-4596-967f-fe1e0adba1b3
-      SCW_TESTING_NAMESPACE_ID: bfb37e50-4bd4-42dc-94ca-2064f8b46898
-      SCW_TESTING_CONTAINER_ID: ${{ secrets.SCW_TESTING_CONTAINER_ID }}
       SCW_TESTING_PRIVATE_NETWORK_ID: ${{ vars.SCW_TESTING_PRIVATE_NETWORK_ID }}
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Validate testing CI configuration
         env:
@@ -36,56 +37,27 @@ jobs:
           SCW_SECRET_KEY: ${{ secrets.SCW_SECRET_KEY }}
           SCW_CONFIGURED_PROJECT_ID: ${{ secrets.SCW_DEFAULT_PROJECT_ID }}
           SCW_CONFIGURED_ORGANIZATION_ID: ${{ secrets.SCW_DEFAULT_ORGANIZATION_ID }}
+          SCW_CONFIGURED_CONTAINER_ID: ${{ secrets.SCW_TESTING_CONTAINER_ID }}
         run: |
           set -euo pipefail
-
-          [[ "$GITHUB_REPOSITORY" == "MTES-MCT/partageonsleau-orchestration" \
-            && "$GITHUB_REF_TYPE" == "branch" && "$GITHUB_REF_NAME" == "testing" ]] || {
-            echo "::error::This workflow can only deploy the testing branch of the orchestration repository"
-            exit 1
-          }
-          for key in SCW_ACCESS_KEY SCW_SECRET_KEY SCW_CONFIGURED_PROJECT_ID \
-            SCW_CONFIGURED_ORGANIZATION_ID SCW_REGION SCW_REGISTRY_ENDPOINT \
-            SCW_IMAGE_NAME SCW_TESTING_CONTAINER_ID SCW_TESTING_PRIVATE_NETWORK_ID; do
-            [[ -n "${!key:-}" ]] || {
-              echo "::error::Missing GitHub configuration: $key"
-              exit 1
-            }
-          done
-          [[ "$SCW_CONFIGURED_PROJECT_ID" == "$SCW_EXPECTED_PROJECT_ID" \
-            && "$SCW_TESTING_CONTAINER_ID" == "fa7450e3-06a4-4f0c-a824-2624eb1d8be7" \
-            && "$SCW_REGION" == "fr-par" \
-            && "$SCW_REGISTRY_ENDPOINT" == "rg.fr-par.scw.cloud/partageonsleau-orchestration" \
-            && "$SCW_IMAGE_NAME" == "partageonsleau-orchestration" ]] || {
-            echo "::error::Unexpected testing resource configuration"
-            exit 1
-          }
+          test -n "$SCW_TESTING_PRIVATE_NETWORK_ID"
+          node .github/scripts/deploy-container.mjs --check testing
 
       - name: Use Node.js from .nvmrc
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
           cache: npm
 
+      - name: Use locked npm version
+        run: |
+          npm install --global "$(node -p 'require("./package.json").packageManager')" --ignore-scripts --no-audit --no-fund
+
       - name: Install dependencies
         run: npm ci
 
-      - name: Type check
-        run: npm run check
-
-      - name: Lint
-        run: npm run lint
-
-      - name: Test
-        run: npm test
-        env:
-          NODE_ENV: test
-
       - name: Install Scaleway CLI
-        run: |
-          curl -fsSL https://raw.githubusercontent.com/scaleway/scaleway-cli/master/scripts/get.sh \
-            | VERSION=2.58.3 sh
-          scw version
+        run: bash .github/scripts/install-scw.sh
 
       - name: Validate Scaleway testing resource ownership
         env:
@@ -96,9 +68,9 @@ jobs:
           SCW_DEFAULT_REGION: ${{ env.SCW_REGION }}
         run: |
           set -euo pipefail
-          namespace="$(scw container namespace get "$SCW_TESTING_NAMESPACE_ID" region="$SCW_REGION" -o json)"
+          namespace="$(scw container namespace get "$SCW_NAMESPACE_ID" region="$SCW_REGION" -o json)"
           [[ "$(jq -er '.project_id' <<< "$namespace")" == "$SCW_EXPECTED_PROJECT_ID" \
-            && "$(jq -er '.name' <<< "$namespace")" == "testing-partageons-leau" ]] || {
+            && "$(jq -er '.name' <<< "$namespace")" == "$SCW_NAMESPACE_NAME" ]] || {
             echo "::error::Unexpected testing namespace"
             exit 1
           }
@@ -109,9 +81,9 @@ jobs:
             echo "::error::Unexpected testing private network"
             exit 1
           }
-          container="$(scw container container get "$SCW_TESTING_CONTAINER_ID" region="$SCW_REGION" -o json)"
-          [[ "$(jq -er '.name' <<< "$container")" == "testing-orchestration" \
-            && "$(jq -er '.namespace_id' <<< "$container")" == "$SCW_TESTING_NAMESPACE_ID" ]] || {
+          container="$(scw container container get "$SCW_CONTAINER_ID" region="$SCW_REGION" -o json)"
+          [[ "$(jq -er '.name' <<< "$container")" == "$SCW_CONTAINER_NAME" \
+            && "$(jq -er '.namespace_id' <<< "$container")" == "$SCW_NAMESPACE_ID" ]] || {
             echo "::error::Unexpected testing orchestration container"
             exit 1
           }
@@ -153,10 +125,10 @@ jobs:
           openssl verify -CAfile deploy/certs/testing/redis-ca.pem deploy/certs/testing/redis-ca.pem
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
       - name: Login to Scaleway Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: rg.fr-par.scw.cloud
           username: nologin
@@ -164,7 +136,7 @@ jobs:
 
       - name: Build and push testing image
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           file: ./deploy/Dockerfile
@@ -177,9 +149,32 @@ jobs:
           cache-from: type=gha,scope=orchestration-testing
           cache-to: type=gha,mode=max,scope=orchestration-testing
 
+
+      - name: Install image vulnerability scanner
+        uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
+        with:
+          version: v0.74.0
+          cache: true
+
+      - name: Scan exact candidate image before any deployment
+        env:
+          IMAGE_REF: ${{ env.SCW_REGISTRY_ENDPOINT }}/${{ env.SCW_IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+        run: |
+          bash .github/scripts/scan-image.sh "$IMAGE_REF"
+          bash .github/scripts/smoke-image.sh "$IMAGE_REF"
+
+      - name: Retain image vulnerability report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: image-audit-${{ github.run_id }}
+          path: .artifacts/security/image-audit.json
+          if-no-files-found: warn
+          retention-days: 30
+
       - name: Deploy immutable testing image
         env:
-          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE_REF: ${{ env.SCW_REGISTRY_ENDPOINT }}/${{ env.SCW_IMAGE_NAME }}@${{ steps.build.outputs.digest }}
           SCW_ACCESS_KEY: ${{ secrets.SCW_ACCESS_KEY }}
           SCW_SECRET_KEY: ${{ secrets.SCW_SECRET_KEY }}
           SCW_DEFAULT_PROJECT_ID: ${{ secrets.SCW_DEFAULT_PROJECT_ID }}
@@ -187,70 +182,21 @@ jobs:
           SCW_DEFAULT_REGION: ${{ env.SCW_REGION }}
         run: |
           set -euo pipefail
-          [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || {
-            echo "::error::Missing immutable image digest"
+          # Deployment changes the image only. Existing networking and configuration
+          # must already match testing; never rebuild a partial environment map.
+          current="$(scw container container get "$SCW_CONTAINER_ID" region="$SCW_REGION" -o json)"
+          jq -e --arg name "$SCW_CONTAINER_NAME" --arg namespace "$SCW_NAMESPACE_ID" --arg network "$SCW_TESTING_PRIVATE_NETWORK_ID" '
+            .name == $name
+            and .namespace_id == $namespace
+            and .private_network_id == $network
+            and .environment_variables.REDIS_TLS_CA_FILE_PATH == "/usr/local/share/ca-certificates/scw-redis-ca.crt"
+            and (.environment_variables.CLIENT_ID | startswith("sa_"))
+            and (.environment_variables.PLE_BASE_URL | startswith("https://"))
+          ' <<< "$current" >/dev/null || {
+            echo "::error::Existing testing configuration is inconsistent; no configuration will be rewritten"
             exit 1
           }
-          image_ref="$SCW_REGISTRY_ENDPOINT/$SCW_IMAGE_NAME@$IMAGE_DIGEST"
-          current="$(scw container container get "$SCW_TESTING_CONTAINER_ID" region="$SCW_REGION" -o json)"
-          [[ "$(jq -er '.namespace_id' <<< "$current")" == "$SCW_TESTING_NAMESPACE_ID" \
-            && "$(jq -er '.name' <<< "$current")" == "testing-orchestration" ]] || {
-            echo "::error::Testing resource ownership changed before deployment"
-            exit 1
-          }
-          client_id="$(jq -er '.environment_variables.CLIENT_ID' <<< "$current")"
-          ple_base_url="$(jq -er '.environment_variables.PLE_BASE_URL' <<< "$current")"
-          [[ "$client_id" == sa_* && "$ple_base_url" == https://* ]] || {
-            echo "::error::Missing or invalid existing PLE connection configuration"
-            exit 1
-          }
-
-          # Preserve the complete ordinary map; never rewrite write-only secrets.
-          expected_environment="$(jq -c --arg release "$GITHUB_SHA" '
-            (.environment_variables // {}) + {
-              REDIS_TLS_CA_FILE_PATH: "/usr/local/share/ca-certificates/scw-redis-ca.crt",
-              SENTRY_ENV: "testing",
-              TZ: "Europe/Paris",
-              SENTRY_RELEASE: $release,
-              SENTRY_SERVICE: "partageonsleau-orchestration"
-            }
-          ' <<< "$current")"
-          secret_keys_before="$(jq -c '(.secret_environment_variables // {}) | keys | sort' <<< "$current")"
-          settings_filter='{max_scale, mvcpu_limit, memory_limit_bytes, local_storage_limit_bytes, timeout, privacy, protocol, port, https_connections_only, sandbox, scaling_option, liveness_probe}'
-          settings_before="$(jq -c "$settings_filter" <<< "$current")"
-          mapfile -d '' -t environment_args < <(
-            jq -jr 'to_entries[] | "environment-variables.\(.key)=\(.value)\u0000"' <<< "$expected_environment"
-          )
-          scw container container update "$SCW_TESTING_CONTAINER_ID" \
-            image="$image_ref" \
-            min-scale=1 \
-            private-network-id="$SCW_TESTING_PRIVATE_NETWORK_ID" \
-            "${environment_args[@]}" \
-            region="$SCW_REGION" --wait >/dev/null
-
-          updated="$(scw container container get "$SCW_TESTING_CONTAINER_ID" region="$SCW_REGION" -o json)"
-          [[ "$(jq -er '.image' <<< "$updated")" == "$image_ref" \
-            && "$(jq -er '.status' <<< "$updated")" == "ready" \
-            && "$(jq -er '.namespace_id' <<< "$updated")" == "$SCW_TESTING_NAMESPACE_ID" \
-            && "$(jq -er '.private_network_id' <<< "$updated")" == "$SCW_TESTING_PRIVATE_NETWORK_ID" \
-            && "$(jq -er '.min_scale' <<< "$updated")" == "1" ]] || {
-            echo "::error::Unexpected orchestration deployment result"
-            exit 1
-          }
-          jq -e --argjson expected "$expected_environment" '.environment_variables == $expected' \
-            <<< "$updated" >/dev/null || {
-            echo "::error::Container environment map was not preserved"
-            exit 1
-          }
-          [[ "$(jq -c '(.secret_environment_variables // {}) | keys | sort' <<< "$updated")" == "$secret_keys_before" \
-            && "$(jq -c "$settings_filter" <<< "$updated")" == "$settings_before" ]] || {
-            echo "::error::Container secret names or unrelated settings changed unexpectedly"
-            exit 1
-          }
-          endpoint="$(jq -er '.public_endpoint' <<< "$updated")"
-          curl --fail --silent --show-error --retry 6 --retry-all-errors \
-            --retry-delay 5 --connect-timeout 10 --max-time 30 \
-            "https://${endpoint#https://}/health" >/dev/null
+          node .github/scripts/deploy-container.mjs "$SCW_CONTAINER_ID" /health
 
       - name: Publish testing tag after successful deployment
         env:

@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import * as XLSX from 'xlsx'
+import {type WorkBook} from 'xlsx'
+import XLSX from './xlsx.js'
 import {
   ConflictPolicy,
   Granularity,
@@ -79,7 +80,7 @@ type AquasysRowInput = {
 }
 
 type AquasysWorkbookReadResult = {
-  workbook: XLSX.WorkBook
+  workbook: WorkBook
   fallbackToFirstSheet: boolean
 }
 
@@ -198,7 +199,8 @@ function parseExcelDate(rawDate: number): Date | undefined {
   }
 
   const startDate = new Date(Date.UTC(1900, 0, 1))
-  return new Date(startDate.getTime() + (rawDate - 2) * 86_400_000)
+  const elapsedMilliseconds = (rawDate - 2) * 86_400_000
+  return new Date(startDate.getTime() + elapsedMilliseconds)
 }
 
 function parseAquasysDate(
@@ -250,9 +252,7 @@ function parseAquasysNumber(rawValue: string | number): number | undefined {
     return rawValue
   }
 
-  const cleaned = String(rawValue)
-    .replaceAll(/[\s\u00A0\u202F]+/gv, '')
-    .replace(',', '.')
+  const cleaned = String(rawValue).replaceAll(/\s+/gv, '').replace(',', '.')
   if (!cleaned) {
     return undefined
   }
@@ -268,7 +268,7 @@ function parseAquasysNumber(rawValue: string | number): number | undefined {
 function normalizeAquasysHeader(value: string): string {
   return value
     .normalize('NFD')
-    .replaceAll(/[\u0300-\u036F]/gv, '')
+    .replaceAll(/[\u{300}-\u{36F}]/gv, '')
     .toLowerCase()
     .trim()
     .replaceAll(/\s+/gv, '_')
@@ -461,10 +461,11 @@ function splitValueEqually(
 
   const scaledValue = Math.round(value * AQUASYS_ALLOCATION_DECIMAL_SCALE)
   const baseValue = Math.trunc(scaledValue / participantCount)
-  const remainder = scaledValue - baseValue * participantCount
-  const receivesRemainder = participantIndex < Math.abs(remainder)
+  const allocatedBaseValue = baseValue * participantCount
+  const remainder = scaledValue - allocatedBaseValue
+  const isReceivesRemainder = participantIndex < Math.abs(remainder)
   const allocatedValue =
-    baseValue + (receivesRemainder ? Math.sign(remainder) : 0)
+    baseValue + (isReceivesRemainder ? Math.sign(remainder) : 0)
 
   return allocatedValue / AQUASYS_ALLOCATION_DECIMAL_SCALE
 }
@@ -500,9 +501,9 @@ function splitSharedMeterVolumes(
     allocatedRows.push(
       ...uniqueRows.map((row, participantIndex) => ({
         ...row,
-        ...(participantCount > 1
-          ? {allocationParticipantCounts: [participantCount]}
-          : {}),
+        ...(participantCount > 1 && {
+          allocationParticipantCounts: [participantCount],
+        }),
         value: splitValueEqually(row.value, participantCount, participantIndex),
       })),
     )

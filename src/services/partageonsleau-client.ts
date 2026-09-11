@@ -26,7 +26,7 @@ import {
  * configurée (`PLE_BASE_URL`, `CLIENT_ID`, `CLIENT_SECRET` tous renseignés) :
  *
  * 1. **`getAvailableServiceAccounts`** — Retourne `[CLIENT_ID]` : un seul compte
- *    service est piloté par les identifiants présents dans l’environnement.
+ * service est piloté par les identifiants présents dans l’environnement.
  * 2. **`getServiceAccountToken`** — `POST /service-accounts/token` avec
  *    `clientId` / `clientSecret` → JWT compte service.
  * 3. **`getDeclarantsForServiceAccount`** — `GET /service-accounts/me/declarants`
@@ -119,8 +119,8 @@ function isDeclarantContextPayload(
     return false
   }
 
-  return value.points.every((point) => {
-    return (
+  return value.points.every(
+    (point) =>
       isRecord(point) &&
       (point.pointId === undefined || typeof point.pointId === 'string') &&
       (point.flowType === undefined ||
@@ -134,9 +134,8 @@ function isDeclarantContextPayload(
         typeof point.connectorRate === 'number') &&
       (point.mostRecentAvailableDate === undefined ||
         typeof point.mostRecentAvailableDate === 'string') &&
-      (point.sourceFile === undefined || typeof point.sourceFile === 'string')
-    )
-  })
+      (point.sourceFile === undefined || typeof point.sourceFile === 'string'),
+  )
 }
 
 function isServiceAccountDeclarantsResponse(
@@ -146,28 +145,27 @@ function isServiceAccountDeclarantsResponse(
     return false
   }
 
-  return value.data.every((item) => {
-    return (
+  return value.data.every(
+    (item) =>
       isRecord(item) &&
       typeof item.declarantUserId === 'string' &&
       (item.declarantName === undefined ||
-        typeof item.declarantName === 'string')
-    )
-  })
+        typeof item.declarantName === 'string'),
+  )
 }
 
 function isDeclarantContextApiResponse(
-  value: unknown,
-): value is DeclarantContextApiResponse {
+  response: unknown,
+): response is DeclarantContextApiResponse {
   if (
-    !isRecord(value) ||
-    typeof value.success !== 'boolean' ||
-    !Array.isArray(value.exploitations)
+    !isRecord(response) ||
+    typeof response.success !== 'boolean' ||
+    !Array.isArray(response.exploitations)
   ) {
     return false
   }
 
-  return value.exploitations.every((exploitation) => {
+  return response.exploitations.every((exploitation) => {
     if (!isRecord(exploitation) || !isRecord(exploitation.point)) {
       return false
     }
@@ -196,7 +194,7 @@ function isDeclarantContextApiResponse(
       connectors === undefined ||
       connectors === null ||
       (Array.isArray(connectors) &&
-        connectors.every((connector) => isValidConnector(connector)))
+        connectors.every((item) => isValidConnector(item)))
 
     return (
       typeof exploitation.point.id === 'string' &&
@@ -416,7 +414,7 @@ function normalizeTimeserieValues(metric: Timeserie): TimeserieValue[] {
   }
 
   const sortedEntries: TimeserieValue[] = []
-  for (const entry of valuesByBucket.entries()) {
+  for (const entry of valuesByBucket) {
     const value = entry[1]
     const insertIndex = sortedEntries.findIndex(
       (current) => current.date.getTime() > value.date.getTime(),
@@ -504,10 +502,10 @@ function serializePayloadDataForPost(
       values: metric.values.map((value) => ({
         ...value,
         date: value.date.toISOString(),
-        ...(value.periodStart
-          ? {periodStart: value.periodStart.toISOString()}
-          : {}),
-        ...(value.periodEnd ? {periodEnd: value.periodEnd.toISOString()} : {}),
+        ...(value.periodStart && {
+          periodStart: value.periodStart.toISOString(),
+        }),
+        ...(value.periodEnd && {periodEnd: value.periodEnd.toISOString()}),
       })),
     })),
   }
@@ -710,8 +708,7 @@ export class PartageonsLeauClient {
         })
         .map((connector) => {
           const connectorParameters = connector.parameters ?? {}
-          const {sourceFile} = connectorParameters
-          const {sourcePointId} = connectorParameters
+          const {sourceFile, sourcePointId} = connectorParameters
 
           return {
             pointId: exploitation.point.id,

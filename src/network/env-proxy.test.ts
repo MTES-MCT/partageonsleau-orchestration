@@ -13,7 +13,10 @@ async function listen(t: TestContext, server: Server): Promise<number> {
     server.close()
   })
   const address = server.address()
-  assert.ok(address && typeof address !== 'string')
+  if (address === null || typeof address === 'string') {
+    throw new Error('Expected the synthetic HTTP server to listen on TCP')
+  }
+
   return address.port
 }
 
@@ -65,13 +68,13 @@ async function fetchInChild(
         },
         timeout: 5000,
       },
-      (error, stdout) => {
+      (error, childStdout) => {
         if (error) {
           reject(new Error('Child fetch failed', {cause: error}))
           return
         }
 
-        resolve(stdout)
+        resolve(childStdout)
       },
     )
   })
@@ -113,7 +116,10 @@ void test('native fetch uses the environment proxy without a per-request agent',
 
 void test('HTTPS fetch uses HTTPS_PROXY and rejects a denied CONNECT', async (t) => {
   const proxy = await fakeProxy(t, true)
-  await assert.rejects(fetchInChild('https://provider.invalid/data', proxy.url))
+  await assert.rejects(
+    fetchInChild('https://provider.invalid/data', proxy.url),
+    Error,
+  )
   assert.deepEqual(proxy.requests, ['provider.invalid:443'])
 })
 
@@ -167,7 +173,10 @@ void test('a refused proxy never falls back to a reachable direct origin', async
   })
   const port = await listen(t, origin)
   const proxy = await fakeProxy(t, true)
-  await assert.rejects(fetchInChild(`http://localhost:${port}/data`, proxy.url))
+  await assert.rejects(
+    fetchInChild(`http://localhost:${port}/data`, proxy.url),
+    Error,
+  )
   assert.equal(directRequests, 0)
   assert.deepEqual(proxy.requests, [`localhost:${port}`])
 })
