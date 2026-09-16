@@ -6,10 +6,10 @@ Orchestrateur TypeScript pour récupérer des données métier (connecteurs exte
 
 Le job `pull-updated-data` enchaîne :
 
-1. récupération des comptes service concernés (mock local ou API PLE selon la configuration) ;
-2. génération du JWT compte service ;
-3. liste des déclarants autorisés ;
-4. pour chaque déclarant, JWT déclarant puis récupération des contextes / points ;
+1. sélection du compte de service configuré par `CLIENT_ID` (ou des comptes fictifs en mode local) ;
+2. obtention d'un jeton opaque de compte de service auprès de l'API ;
+3. récupération de la liste des déclarants renvoyée par l'API ;
+4. pour chaque déclarant, récupération des contextes et points avec ce même jeton ;
 5. exécution du connecteur associé à chaque point ;
 6. normalisation du payload et envoi vers PLE (`ingest`) lorsque l’API est configurée.
 
@@ -17,12 +17,12 @@ Un second job, `process-declaration`, traite les déclarations déposées sur PL
 
 ## Stack
 
-- **Node.js** 24.x (voir `engines` dans `package.json`) + **TypeScript** (ESM, `NodeNext`)
+- **Node.js** (version dans [`.nvmrc`](.nvmrc)) + **TypeScript** (ESM, `NodeNext`)
 - **Express** 5 — API HTTP et webhooks
 - **BullMQ** + **ioredis** — files d’attente et workers
 - **Sentry** (`@sentry/node`, profiling) — erreurs et traces (optionnel via `SENTRY_DSN`)
 - **moment**, **xlsx** — utilitaires métier (ex. traitement de déclarations)
-- **xo** — lint (script `lint`)
+- **ESLint** + **Prettier** — analyse et formatage (script `lint`)
 
 ## Monitoring BullMQ (optionnel)
 
@@ -34,9 +34,16 @@ Le dashboard BullBoard est disponible sur `/admin/queues` si `BULLBOARD_PASSWORD
 
 ## Installation
 
+Utiliser les versions définies dans `.nvmrc` et dans le champ `packageManager`
+de [`package.json`](package.json).
+
 ```bash
-npm install
+nvm use
+npm ci
 ```
+
+Ne pas utiliser `--force` ni `--legacy-peer-deps`. Réexaminer les scripts
+d'installation autorisés dans `allowScripts` lors des mises à jour.
 
 ## Configuration
 
@@ -48,7 +55,7 @@ Copier `.env.example` vers `.env` et renseigner les variables.
 | `REDIS_URL` | URL Redis pour BullMQ (ex. `redis://localhost:6380`) |
 | `REDIS_TLS_CA_FILE_PATH` | CA pour Redis TLS si besoin |
 | `PLE_BASE_URL` | URL de base de l’API PLE |
-| `CLIENT_ID` / `CLIENT_SECRET` | Identifiants OAuth du compte service PLE |
+| `CLIENT_ID` / `CLIENT_SECRET` | Identifiants du compte de service PLE, échangés contre un jeton opaque |
 | `PLE_WEBHOOK_SECRET` | Secret HMAC pour valider `X-PLE-Signature` sur `/hooks/declarations` |
 | `WILLIE_API_TOKEN` | Bearer pour l’API Willie |
 | `ORANGE_LIVE_OBJECTS_API_KEY` | Clé API Orange Live Objects |
@@ -65,8 +72,30 @@ Copier `.env.example` vers `.env` et renseigner les variables.
 - `npm run build` — compilation vers `dist/`
 - `npm run start` — exécution de `dist/index.js` (nécessite un build préalable)
 - `npm run check` — `tsc --noEmit`
-- `npm run lint` / `npm run lint:fix` — xo
+- `npm run lint` / `npm run lint:fix` — ESLint et Prettier
 - `npm test` — tests unitaires avec le lanceur de tests Node.js et `tsx`
+- `npm run replay:declaration -- <code-ou-uuid> --env-file .env` — relance directement le traitement d'une déclaration sur l'API configurée ; vérifier la cible avant exécution, ce traitement écrit des données
+
+## Vérifications et maintenance
+
+```bash
+npm audit --include=dev --audit-level=low
+npm audit --omit=dev --audit-level=low
+npm run check
+npm run lint
+npm test
+npm run build
+```
+
+Les imports sont testés sur des fixtures CSV/XLS/XLSX, sans connecteur réel.
+Les tests de compatibilité BullMQ 5/6 nécessitent `QUEUE_INTEGRATION_TESTS=1`
+et un `REDIS_URL` vers un Redis local jetable, base 1 ou 2. Chaque essai utilise
+un préfixe aléatoire. L'alias `bullmq-v5` est réservé aux tests et absent de
+l'image finale ; ioredis utilise RESP2.
+
+Ces tests ne remplacent pas la recette des connecteurs externes. Pour les contrôles
+CI et le déploiement, voir le
+[guide commun des pipelines](https://github.com/MTES-MCT/prelevements-deau-api/blob/testing/docs/pipelines.md).
 
 ## API HTTP
 
@@ -100,21 +129,23 @@ Les workers tournent dans le même processus que le serveur HTTP (concurrence **
 
 ### Connecteurs enregistrés
 
-- `willie`
-- `orange_live_objects`
-- `aquasys`
-- `template_file`
+Le [registre](src/connectors/index.ts) comprend :
+
+- API : `willie`, `orange_live_objects`, `omniscient_murgat`.
+- Fichiers : `aquasys`, `bv_tech`, `template_file`, `smnpr`, `gidaf`.
 
 ## Contrat de sortie connecteur
 
-Chaque connecteur produit un payload standardisé par point :
+Chaque connecteur produit un payload standardisé par point, défini dans
+[`src/connectors/types.ts`](src/connectors/types.ts) :
 
 - `id_point_de_prelevement`
+- `flow_type` éventuel (`PRELEVEMENT` ou `REJET`), `source_type` et métadonnées de source
 - `metrics[]` avec :
-  - `type` (`index` ou `volume_preleve` — enum `MetricType` dans `types.ts`)
-  - `frequency` / granularité
-  - `values[]` (`date`, `value`)
-  - `unit` (ex. `m3` ou `null`)
+  - `type` (`index`, `volume` ou `debit`)
+  - `granularity`, `conflictPolicy` et `usage` éventuel
+  - `values[]` (`date`, `value`, éventuellement `periodStart` et `periodEnd` pour une période semi-ouverte)
+  - `unit` (`m3`, `L/s` ou non renseignée)
 
 ## Willie (comportement actuel)
 
@@ -125,14 +156,8 @@ Le connecteur Willie appelle :
 Paramètres typiques :
 
 - `stationIds` = `sourcePointId` (identifiant station Willie)
-- `startDate` = `lastRunAt` (ou repli si absent)
+- `startDate` = `mostRecentAvailableDate` renvoyée par l'API, ou date d'activation définie dans le connecteur si aucune donnée n'est disponible
 - `endDate` = maintenant
 - `resolution` = `day`
 
 La réponse `stations[].datapoints[]` est mappée vers le format commun.
-
-## Pistes d’évolution
-
-- Réduire la dépendance aux mocks (`mock_responses`) en environnements de dev
-- Rendre certaines options (fréquences, cron) configurables par variables d’environnement
-- Ajouter des tests ciblés par connecteur et par job
