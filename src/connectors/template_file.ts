@@ -85,9 +85,10 @@ export function normalizeTemplateDateOnly(rawDate: unknown): Date | undefined {
     return undefined
   }
 
+  const timezoneOffsetMilliseconds = parsedDate.getTimezoneOffset() * 60 * 1000
   const timezoneNeutralTimestamp =
     rawDate instanceof Date
-      ? parsedDate.getTime() - parsedDate.getTimezoneOffset() * 60 * 1000
+      ? parsedDate.getTime() - timezoneOffsetMilliseconds
       : parsedDate.getTime()
 
   return new Date(
@@ -101,7 +102,8 @@ export function getExclusiveTemplatePeriodEnd(dateEnd: Date): Date {
 }
 
 function getUtcMonthIndex(date: Date): number {
-  return date.getUTCFullYear() * 12 + date.getUTCMonth()
+  const yearMonths = date.getUTCFullYear() * 12
+  return yearMonths + date.getUTCMonth()
 }
 
 export function inferTemplateGranularity(
@@ -111,13 +113,13 @@ export function inferTemplateGranularity(
   const periodEnd = getExclusiveTemplatePeriodEnd(inclusiveDateEnd)
   const durationDays =
     (periodEnd.getTime() - dateStart.getTime()) / MILLISECONDS_PER_DAY
-  const startsOnFirstDay = dateStart.getUTCDate() === 1
-  const endsBeforeFirstDay = periodEnd.getUTCDate() === 1
+  const isStartsOnFirstDay = dateStart.getUTCDate() === 1
+  const isEndsBeforeFirstDay = periodEnd.getUTCDate() === 1
   const monthCount = getUtcMonthIndex(periodEnd) - getUtcMonthIndex(dateStart)
 
   if (
-    startsOnFirstDay &&
-    endsBeforeFirstDay &&
+    isStartsOnFirstDay &&
+    isEndsBeforeFirstDay &&
     dateStart.getUTCMonth() === 0 &&
     monthCount === 12
   ) {
@@ -125,15 +127,15 @@ export function inferTemplateGranularity(
   }
 
   if (
-    startsOnFirstDay &&
-    endsBeforeFirstDay &&
+    isStartsOnFirstDay &&
+    isEndsBeforeFirstDay &&
     dateStart.getUTCMonth() % 3 === 0 &&
     monthCount === 3
   ) {
     return Granularity.QUARTER
   }
 
-  if (startsOnFirstDay && endsBeforeFirstDay && monthCount === 1) {
+  if (isStartsOnFirstDay && isEndsBeforeFirstDay && monthCount === 1) {
     return Granularity.MONTH
   }
 
@@ -198,9 +200,9 @@ function parseTemplateVolumeRow(
     periodEnd: getExclusiveTemplatePeriodEnd(dateEnd),
     granularity: inferTemplateGranularity(dateStart, dateEnd),
     value: volume.value,
-    ...(usageResolution.status === 'unknown'
-      ? {unknownUsageValue: usageResolution.rawValue}
-      : {}),
+    ...(usageResolution.status === 'unknown' && {
+      unknownUsageValue: usageResolution.rawValue,
+    }),
   }
 }
 
@@ -380,7 +382,7 @@ export class TemplateFileConnector extends BaseConnector<
     const metrics = [...byTypeAndUsage.values()].map(
       ({type, usage, granularity, values}) => ({
         type,
-        ...(usage ? {usage} : {}),
+        ...(usage && {usage}),
         granularity,
         conflictPolicy: TemplateFileConnector.metric.conflictPolicy,
         values,
@@ -414,14 +416,12 @@ export class TemplateFileConnector extends BaseConnector<
         provider: 'template_file',
         sheet_name: TEMPLATE_SHEET_NAME,
         row_count: parsedData.records.length,
-        ...(unknownUsageValues.length > 0
-          ? {
-              unknown_usage_count: parsedData.records.filter(
-                (record) => record.unknownUsageValue,
-              ).length,
-              unknown_usage_values: unknownUsageValues,
-            }
-          : {}),
+        ...(unknownUsageValues.length > 0 && {
+          unknown_usage_count: parsedData.records.filter(
+            (record) => record.unknownUsageValue,
+          ).length,
+          unknown_usage_values: unknownUsageValues,
+        }),
       },
       min_date: minDate,
       max_date: maxDate,

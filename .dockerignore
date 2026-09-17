@@ -1,4 +1,7 @@
 node_modules
+.artifacts
+tests/browser
+playwright.config.mjs
 dist
 .git
 **/.git

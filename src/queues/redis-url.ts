@@ -17,7 +17,7 @@ function readHostname(
     value.length <= 253 &&
     value
       .split('.')
-      .every((label) => /^[a-z\d](?:[a-z\d\-]{0,61}[a-z\d])?$/iv.test(label))
+      .every((label) => /^[\da-z](?:[\d\-a-z]{0,61}[\da-z])?$/iv.test(label))
 
   if (isIP(value) === 4 || isDnsHostname) {
     return value

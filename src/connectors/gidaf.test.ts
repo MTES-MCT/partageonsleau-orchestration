@@ -3,7 +3,7 @@ import {mkdtemp, rm} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import xlsx from 'xlsx'
+import xlsx from './xlsx.js'
 import {GidafConnector} from './gidaf.js'
 import {
   ConflictPolicy,

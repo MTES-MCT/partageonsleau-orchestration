@@ -31,7 +31,6 @@ export function createBullBoardRouter(
     serverAdapter,
   })
 
-  // eslint-disable-next-line new-cap
   const router = express.Router()
 
   router.use((request, response, next) => {
@@ -42,7 +41,7 @@ export function createBullBoardRouter(
       return response.status(401).json({error: 'Authentification requise'})
     }
 
-    const base64Credentials = authHeader.split(' ')[1]
+    const base64Credentials = authHeader.split(' ', 2)[1]
     const credentials = Buffer.from(base64Credentials, 'base64').toString(
       'ascii',
     )
