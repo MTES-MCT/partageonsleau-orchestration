@@ -1,3 +1,4 @@
+import {isRivesEtEauxEnabled} from '../jobs/pull-rives-et-eaux.js'
 import {JOBS, getQueue} from './config.js'
 
 export async function startScheduler() {
@@ -15,10 +16,16 @@ export async function startScheduler() {
       continue
     }
 
+    if (job.name === 'pull-rives-et-eaux' && !isRivesEtEauxEnabled()) {
+      await queue.removeJobScheduler(`${job.name}-daily`)
+      continue
+    }
+
     await queue.upsertJobScheduler(
       `${job.name}-daily`,
       {
         pattern: job.cron,
+        ...('timeZone' in job ? {tz: job.timeZone} : {}),
       },
       {
         name: job.name,

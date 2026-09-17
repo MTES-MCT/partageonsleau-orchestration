@@ -82,6 +82,44 @@ Copier `.env.example` vers `.env` et renseigner les variables.
 
 Les workers tournent dans le même processus que le serveur HTTP (concurrence **1** par file).
 
+### Rives et Eaux (Calypso)
+
+Le job dédié `pull-rives-et-eaux` est désactivé par défaut. Il s'active avec
+`RIVES_ET_EAUX_ENABLED=true`, `RIVES_ET_EAUX_API_KEY` en variable secrète et les
+identifiants PLE habituels. `RIVES_ET_EAUX_BASE_URL` vaut par défaut
+`https://services.riveseteaux.fr` ; `RIVES_ET_EAUX_TIMEZONE` doit être `Europe/Paris`.
+La clé fournisseur ne doit figurer ni dans les paramètres des exploitations ni dans Git.
+
+Chaque jour à **03:30 Europe/Paris**, le job relit les **15 jours locaux révolus**,
+un appel `/api/public/Calypso/Export` par journée pour tous les compteurs.
+`dateDebut` et `dateFin` portent les dates locales des deux minuits consécutifs.
+Les doublons identiques aux bornes inclusives sont éliminés ; les observations
+contradictoires et lignes malformées sont conservées. Le connecteur traduit seul
+le format Calypso vers des relevés génériques : `externalId`, `observedAt`, `index`
+décimal, `status`, `reason`, `quality`, `origin` et preuve originale `raw`.
+Les codes A/B/C/D/E/X donnent un relevé admissible ; Y/W/Z et les codes inconnus
+donnent `status: INVALID`. Les timestamps locaux originaux restent dans `raw`,
+avec leur conversion UTC exacte ; les heures ambiguës ou inexistantes donnent
+`observedAt: null` et sont retransmises dans chaque fenêtre concernée.
+Aucune répartition, arrondi au quart d'heure ou reconstruction de volume n'est faite ici.
+
+Le client générique `MeterReadingsClient` lit
+`GET /service-accounts/meter-streams?provider=rives-et-eaux&scope=epidropt`.
+Sans flux autorisé, aucun appel fournisseur n'est effectué. Les lots sont envoyés à
+`POST /service-accounts/meter-readings/ingestions`, avec `provider`, `scope` et le
+mode `LIVE` ; seul un
+accusé `persisted: true`, avec le nombre reçu et le checkpoint de la fenêtre,
+permet de passer à la journée suivante. L'API conserve le checkpoint durable,
+filtre les compteurs autorisés et décide de la publication selon les affectations,
+statuts normalisés et conflits. L'API ne connaît ni Calypso, ni ses codes qualité,
+ni son fuseau horaire. Les dates antérieures à l'activation sont conservées à l'état brut.
+
+Un échec fournisseur ou PLE fait échouer le job (trois tentatives BullMQ, délai
+exponentiel). Les requêtes natives `fetch` conservent la configuration du proxy,
+ont un timeout et refusent les redirections ; les erreurs n'exposent ni clé ni
+corps des réponses. Le nouveau chemin ne passe pas par le connecteur générique
+par PP et n'applique pas `connector.rate`.
+
 ## Architecture (fichiers)
 
 - `index.ts` — importe et démarre `src/server.ts`
