@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-restricted-types -- Explicit JSON null is part of the ingestion contract. */
 export type MeterStreamContext = {
   provider: string
   scope: string

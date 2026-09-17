@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/require-await -- Test doubles preserve asynchronous connector contracts. */
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {

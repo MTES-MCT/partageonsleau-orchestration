@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-restricted-types -- Explicit JSON null preserves unlocated or invalid provider readings. */
 import {createHash} from 'node:crypto'
 import type {MeterReading} from '../services/meter-readings-client.js'
 
