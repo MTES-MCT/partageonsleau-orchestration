@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import type {CellObject} from 'xlsx'
 import XLSX from './xlsx.js'
 import {
   getExclusiveTemplatePeriodEnd,
@@ -285,4 +286,114 @@ void test('produit des periodes semi-ouvertes et remplace les donnees hors Willi
     dailyMetric.values[0]?.periodEnd?.toISOString(),
     '2026-08-02T00:00:00.000Z',
   )
+})
+
+void test('sépare deux codes comptage au même PP et préserve les zéros initiaux', async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'template-codes-'))
+  t.after(async () => fs.rm(directory, {recursive: true, force: true}))
+  const sourceFile = path.join(directory, 'codes.xlsx')
+  const workbook = XLSX.utils.book_new()
+  const worksheet = XLSX.utils.json_to_sheet(
+    ['001', '002', ''].map((countingCode, index) => ({
+      id_point_de_prelevement: 'POINT-1',
+      code_comptage: countingCode,
+      date_debut: '2026-07-01',
+      date_fin: '2026-07-31',
+      volume_m3: 10 * (index + 1),
+      usage: '2',
+    })),
+  )
+  XLSX.utils.book_append_sheet(workbook, worksheet, 'declaration_de_volume')
+  XLSX.writeFile(workbook, sourceFile)
+  const context = {
+    serviceAccount: 'synthetic-test',
+    sourcePointId: 'POINT-1',
+    rate: 100,
+    mostRecentAvailableDate: new Date('1900-01-01T00:00:00.000Z'),
+    sourceFile,
+  }
+  const connector = new TemplateFileConnector()
+  const output = await connector.run(context)
+  assert.deepEqual(
+    output.data.metrics.map((metric) => ({
+      countingCode: metric.countingCode,
+      values: metric.values.map((value) => value.value),
+    })),
+    [
+      {countingCode: '001', values: [10]},
+      {countingCode: '002', values: [20]},
+      {countingCode: undefined, values: [30]},
+    ],
+  )
+  await assert.rejects(
+    connector.run({...context, connectorId: 'connector-1'}),
+    /ambiguë/,
+  )
+  await assert.rejects(
+    connector.run({
+      ...context,
+      connectorId: 'connector-1',
+      countingCode: '001',
+    }),
+    /ambiguë/,
+  )
+  worksheet['!ref'] = 'A1:F3'
+  XLSX.writeFile(workbook, sourceFile)
+  await assert.rejects(
+    connector.run({...context, connectorId: 'connector-1'}),
+    /Plusieurs comptages/,
+  )
+  const scoped = await connector.run({
+    ...context,
+    connectorId: 'connector-1',
+    exploitationId: 'exploitation-1',
+    countingCode: '001',
+  })
+  assert.equal(scoped.exploitationId, 'exploitation-1')
+  assert.equal(scoped.countingCode, '001')
+  assert.ok(
+    scoped.data.metrics.every((metric) => metric.countingCode === '001'),
+  )
+  assert.ok(
+    scoped.data.metrics.every(
+      (metric) => metric.exploitationId === 'exploitation-1',
+    ),
+  )
+  assert.deepEqual(
+    scoped.data.metrics.flatMap((metric) =>
+      metric.values.map((value) => value.value),
+    ),
+    [10],
+  )
+})
+
+void test('accepte le libellé Code comptage et les cellules numériques formatées en texte', async (t) => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), 'template-code-text-'),
+  )
+  t.after(async () => fs.rm(directory, {recursive: true, force: true}))
+  const sourceFile = path.join(directory, 'codes.xlsx')
+  const workbook = XLSX.utils.book_new()
+  const worksheet = XLSX.utils.aoa_to_sheet([
+    [
+      'id_point_de_prelevement',
+      'Code comptage',
+      'date_debut',
+      'date_fin',
+      'volume_m3',
+    ],
+    ['POINT-1', 12, '2026-07-01', '2026-07-31', 10],
+  ])
+  ;(worksheet.B2 as CellObject).z = '00000'
+  XLSX.utils.book_append_sheet(workbook, worksheet, 'declaration_de_volume')
+  XLSX.writeFile(workbook, sourceFile)
+  const output = await new TemplateFileConnector().run({
+    serviceAccount: 'synthetic-test',
+    sourcePointId: 'POINT-1',
+    rate: 100,
+    mostRecentAvailableDate: new Date('1900-01-01T00:00:00.000Z'),
+    sourceFile,
+  })
+  assert.equal(output.data.metrics[0].countingCode, '00012')
+  assert.equal(output.data.metrics[0].values[0].value, 10)
 })

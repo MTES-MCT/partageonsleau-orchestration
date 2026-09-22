@@ -63,6 +63,8 @@ type DeclarantContextPayload = {
   contextId: string
   points: Array<{
     pointId: string
+    exploitationId?: string
+    countingCode?: string
     flowType?: PointFlowType
     sourcePointId: string
     connector: string
@@ -83,6 +85,8 @@ type ServiceAccountDeclarantsResponse = {
 type DeclarantContextApiResponse = {
   success: boolean
   exploitations: Array<{
+    id?: string
+    countingCode?: string | null
     point: {
       id: string
       name?: string
@@ -123,6 +127,10 @@ function isDeclarantContextPayload(
     (point) =>
       isRecord(point) &&
       (point.pointId === undefined || typeof point.pointId === 'string') &&
+      (point.exploitationId === undefined ||
+        typeof point.exploitationId === 'string') &&
+      (point.countingCode === undefined ||
+        typeof point.countingCode === 'string') &&
       (point.flowType === undefined ||
         point.flowType === PointFlowType.PRELEVEMENT ||
         point.flowType === PointFlowType.REJET) &&
@@ -197,6 +205,10 @@ function isDeclarantContextApiResponse(
         connectors.every((item) => isValidConnector(item)))
 
     return (
+      (exploitation.id === undefined || typeof exploitation.id === 'string') &&
+      (exploitation.countingCode === undefined ||
+        exploitation.countingCode === null ||
+        typeof exploitation.countingCode === 'string') &&
       typeof exploitation.point.id === 'string' &&
       (exploitation.point.flowType === undefined ||
         exploitation.point.flowType === PointFlowType.PRELEVEMENT ||
@@ -670,6 +682,8 @@ export class PartageonsLeauClient {
           contextId: context.contextId,
           points: context.points.map((point) => ({
             pointId: point.pointId,
+            exploitationId: point.exploitationId,
+            countingCode: point.countingCode,
             flowType: point.flowType,
             sourcePointId: point.sourcePointId,
             connector: point.connector,
@@ -712,6 +726,8 @@ export class PartageonsLeauClient {
 
           return {
             pointId: exploitation.point.id,
+            exploitationId: exploitation.id,
+            countingCode: exploitation.countingCode ?? undefined,
             flowType: exploitation.point.flowType,
             sourcePointId:
               typeof sourcePointId === 'string'
@@ -772,6 +788,8 @@ export class PartageonsLeauClient {
       ...serializedOutput,
       metadata: {
         point_id: pointId,
+        exploitation_id: output.exploitationId,
+        counting_code: output.countingCode,
         declarant_id: declarantId,
         context_id: contextId,
         connector_id: output.connectorId,

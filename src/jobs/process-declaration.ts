@@ -26,6 +26,8 @@ type DeclarationFile = {
 
 export type DeclarationPoint = {
   pointId: string
+  exploitationId?: string
+  countingCode?: string | null
   name: string
   codeBSS?: string
   flowType?: PointFlowType
@@ -63,6 +65,8 @@ type LegacySeriesValue = {
 
 type LegacySeries = {
   pointPrelevement: string
+  exploitationId?: string
+  countingCode?: string
   flowType?: PointFlowType
   usage?: WaterUseCode
   metadata?: Record<string, unknown>
@@ -107,6 +111,16 @@ function isDeclarationPoint(value: unknown): value is DeclarationPoint {
   }
 
   if (typeof value.pointId !== 'string' || typeof value.name !== 'string') {
+    return false
+  }
+
+  if (
+    (value.exploitationId !== undefined &&
+      typeof value.exploitationId !== 'string') ||
+    (value.countingCode !== undefined &&
+      value.countingCode !== null &&
+      typeof value.countingCode !== 'string')
+  ) {
     return false
   }
 
@@ -434,12 +448,28 @@ function buildDeclarationPointForDetectedSourceId(parameters: {
       : sourcePointId
   const sourcePointKey = normalizeSourcePointKey(pointName)
 
-  for (const point of declarationPoints) {
-    if (getPointLookupKeys({connectorName, point}).includes(sourcePointKey)) {
-      return {
-        ...point,
-        sourcePointId,
-      }
+  const matches = declarationPoints.filter((point) =>
+    getPointLookupKeys({connectorName, point}).includes(sourcePointKey),
+  )
+
+  if (matches.length === 1) {
+    return {...matches[0], sourcePointId}
+  }
+
+  if (
+    matches.length > 1 &&
+    new Set(matches.map((point) => point.pointId)).size === 1
+  ) {
+    // Le PP est connu, mais ni le code comptage ni la période n'ont encore
+    // été lus. Ne pas choisir une exploitation ni recopier ses dates.
+    const point = matches[0]
+    return {
+      pointId: point.pointId,
+      name: point.name,
+      codeBSS: point.codeBSS,
+      flowType: point.flowType,
+      sourceId: point.sourceId,
+      sourcePointId,
     }
   }
 
@@ -485,7 +515,7 @@ function hasValues(output: ConnectorOutput): boolean {
   return output.data.metrics.some((metric) => metric.values.length > 0)
 }
 
-function metricToLegacySeries(parameters: {
+export function metricToLegacySeries(parameters: {
   point: DeclarationPoint
   metric: Timeserie
   payload: ParsedPointPayload
@@ -510,9 +540,13 @@ function metricToLegacySeries(parameters: {
       right.periodStart ?? right.date,
     ),
   )
+  const countingCode = metric.countingCode ?? payload.countingCode
+  const exploitationId = metric.exploitationId ?? payload.exploitationId
 
   return {
     pointPrelevement: point.name,
+    ...(exploitationId && {exploitationId}),
+    ...(countingCode && {countingCode}),
     ...((payload.flow_type ?? point.flowType) && {
       flowType: payload.flow_type ?? point.flowType,
     }),
@@ -763,7 +797,13 @@ async function runConnectorForDeclaration(parameters: {
   })
 
   for (const fileBatch of fileBatches) {
-    let pointsToProcess = declaration.points
+    let pointsToProcess = buildPointsForDetectedSourceIds({
+      connectorName,
+      declarationPoints: declaration.points,
+      detectedSourcePointIds: declaration.points.map((point) =>
+        resolveSourcePointId({connectorName, point}),
+      ),
+    })
 
     try {
       const detectedSourcePointIds = await connector.discoverSourcePointIds({

@@ -114,6 +114,7 @@ export async function readSpreadsheetSheet<TRow extends SpreadsheetRow>(
   options: {
     connectorName: string
     required?: boolean
+    textColumns?: readonly string[]
   },
 ): Promise<SpreadsheetSheet<TRow>> {
   const absolutePath = path.resolve(filePath)
@@ -150,6 +151,23 @@ export async function readSpreadsheetSheet<TRow extends SpreadsheetRow>(
     defval: '',
     raw: true,
   })
+
+  if (options.textColumns?.length) {
+    const formattedRows = XLSX.utils.sheet_to_json<SpreadsheetRow>(sheet, {
+      defval: '',
+      raw: false,
+    })
+    for (const [index, row] of rows.entries()) {
+      for (const column of options.textColumns) {
+        if (typeof row[column] === 'number') {
+          // Les identifiants formatés « 00000 » sont du texte métier, pas
+          // des quantités. Les dates et valeurs des autres colonnes restent
+          // brutes pour ne pas changer les conventions des parseurs.
+          ;(row as SpreadsheetRow)[column] = formattedRows[index]?.[column]
+        }
+      }
+    }
+  }
 
   return {headers, rows}
 }
