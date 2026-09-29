@@ -72,6 +72,7 @@ type DeclarantContextPayload = {
     connectorRate?: number | undefined
     mostRecentAvailableDate: string | undefined
     sourceFile: string
+    connectorParameters?: Record<string, unknown>
   }>
 }
 
@@ -142,7 +143,10 @@ function isDeclarantContextPayload(
         typeof point.connectorRate === 'number') &&
       (point.mostRecentAvailableDate === undefined ||
         typeof point.mostRecentAvailableDate === 'string') &&
-      (point.sourceFile === undefined || typeof point.sourceFile === 'string'),
+      (point.sourceFile === undefined ||
+        typeof point.sourceFile === 'string') &&
+      (point.connectorParameters === undefined ||
+        isRecord(point.connectorParameters)),
   )
 }
 
@@ -693,6 +697,9 @@ export class PartageonsLeauClient {
               point.mostRecentAvailableDate,
             ),
             sourceFile: point.sourceFile,
+            ...(point.connectorParameters && {
+              connectorParameters: point.connectorParameters,
+            }),
           })),
         }))
     }
@@ -741,6 +748,7 @@ export class PartageonsLeauClient {
               exploitation.mostRecentAvailableDate ?? undefined,
             ),
             sourceFile: typeof sourceFile === 'string' ? sourceFile : undefined,
+            connectorParameters,
           }
         })
     })
@@ -770,7 +778,8 @@ export class PartageonsLeauClient {
     declarantId: string
     contextId: string
     serviceAccountToken: string
-  }): Promise<void> {
+    requireAcknowledgement?: boolean
+  }): Promise<{imported: boolean; skippedValues: number} | undefined> {
     const {output, pointId, declarantId, contextId, serviceAccountToken} =
       parameters
 
@@ -799,6 +808,11 @@ export class PartageonsLeauClient {
     }
 
     if (!this.isApiConfigured()) {
+      if (parameters.requireAcknowledgement) {
+        throw new Error(
+          '[PartageonsLeauClient] Real API configuration is required for acknowledged ingestion.',
+        )
+      }
       console.log(
         `[PartageonsLeauClient] Ingesting ${metricCount} metrics ` +
           `(${valueCount} values) for service account: ${output.serviceAccount} ` +
@@ -809,11 +823,60 @@ export class PartageonsLeauClient {
       return
     }
 
-    await this.postJson(
+    const response = await this.postJson(
       '/service-accounts/connectors/ingest',
       payload,
       serviceAccountToken,
+      parameters.requireAcknowledgement,
     )
+    if (parameters.requireAcknowledgement) {
+      if (
+        !isRecord(response) ||
+        response.success !== true ||
+        typeof response.imported !== 'boolean' ||
+        !Number.isSafeInteger(response.skippedValues) ||
+        (response.skippedValues as number) < 0 ||
+        (response.skippedValues as number) > valueCount
+      ) {
+        throw new Error(
+          '[PartageonsLeauClient] Invalid ingestion acknowledgement.',
+        )
+      }
+      if (response.imported) {
+        const minimum = Date.parse(String(response.minDate))
+        const maximum = Date.parse(String(response.maxDate))
+        if (
+          typeof response.sourceId !== 'string' ||
+          !response.sourceId ||
+          !Number.isFinite(minimum) ||
+          !Number.isFinite(maximum) ||
+          maximum <= minimum ||
+          !normalizedData.min_date ||
+          !normalizedData.max_date ||
+          minimum < normalizedData.min_date.getTime() ||
+          maximum > normalizedData.max_date.getTime() ||
+          (response.skippedValues === 0 &&
+            (minimum !== normalizedData.min_date.getTime() ||
+              maximum !== normalizedData.max_date.getTime())) ||
+          (response.skippedValues as number) >= valueCount
+        ) {
+          throw new Error(
+            '[PartageonsLeauClient] Incomplete ingestion acknowledgement.',
+          )
+        }
+      } else if (
+        response.reason !== 'ALL_METRICS_SKIPPED_BY_CONFLICT' ||
+        response.skippedValues !== valueCount
+      ) {
+        throw new Error(
+          '[PartageonsLeauClient] Ingestion was not acknowledged.',
+        )
+      }
+      return {
+        imported: response.imported,
+        skippedValues: response.skippedValues as number,
+      }
+    }
   }
 
   /** API PLE réelle si base URL + identifiants OAuth compte service sont définis. */
@@ -847,6 +910,7 @@ export class PartageonsLeauClient {
     path: string,
     body: Record<string, unknown>,
     bearerToken?: string,
+    sanitized = false,
   ): Promise<unknown> {
     if (!this.baseUrl) {
       throw new Error('[PartageonsLeauClient] Missing PLE_BASE_URL.')
@@ -860,19 +924,49 @@ export class PartageonsLeauClient {
       headers.Authorization = `Bearer ${bearerToken}`
     }
 
-    const response = await fetch(`${this.baseUrl}${path}`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-    })
+    let response: Response
+    try {
+      response = await fetch(`${this.baseUrl}${path}`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        ...(sanitized && {
+          redirect: 'error',
+          signal: AbortSignal.timeout(30_000),
+        }),
+      })
+    } catch (error) {
+      if (sanitized) {
+        // eslint-disable-next-line preserve-caught-error -- Network errors may contain credentials or request details.
+        throw new Error(
+          '[PartageonsLeauClient] Ingestion request failed or timed out.',
+        )
+      }
+      throw error
+    }
 
     if (!response.ok) {
+      if (sanitized) {
+        throw new Error(
+          `[PartageonsLeauClient] Ingestion HTTP ${response.status}.`,
+        )
+      }
       const responseBody = await response.text()
       throw new Error(
         `[PartageonsLeauClient] POST ${path} failed with status ${response.status}: ${responseBody}`,
       )
     }
 
-    return response.json()
+    try {
+      return await response.json()
+    } catch (error) {
+      if (sanitized) {
+        // eslint-disable-next-line preserve-caught-error -- Invalid JSON errors may contain private response data.
+        throw new Error(
+          '[PartageonsLeauClient] Invalid ingestion JSON response.',
+        )
+      }
+      throw error
+    }
   }
 }

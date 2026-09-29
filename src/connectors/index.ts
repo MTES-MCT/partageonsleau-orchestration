@@ -7,6 +7,7 @@ import {type BaseConnector} from './base-connector.js'
 import {BvTechConnector} from './bv-tech.js'
 import {OmniscientMurgatConnector} from './omniscient_murgat.js'
 import {SmnprConnector} from './smnpr.js'
+import {EvelerConnector} from './eveler.js'
 
 export const connectorRegistry = new Map<
   string,
@@ -20,4 +21,5 @@ export const connectorRegistry = new Map<
   ['smnpr', new SmnprConnector()],
   ['gidaf', new GidafConnector()],
   ['omniscient_murgat', new OmniscientMurgatConnector()],
+  ['eveler', new EvelerConnector()],
 ])
