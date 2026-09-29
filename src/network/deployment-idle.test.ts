@@ -5,9 +5,13 @@ import {
   assertRemoteOrchestrationIdle,
 } from './deployment-idle.js'
 
-function idleQueues() {
+function idleQueues(includeRives = false) {
   return {
-    queues: ['pull-updated-data', 'process-declaration'].map((name) => ({
+    queues: [
+      'pull-updated-data',
+      'process-declaration',
+      ...(includeRives ? ['pull-rives-et-eaux'] : []),
+    ].map((name) => ({
       name,
       counts: {active: 0, waiting: 0, prioritized: 0, delayed: 1},
     })),
@@ -16,6 +20,7 @@ function idleQueues() {
 
 void test('deployment preflight accepts idle orchestration queues with delayed schedules', () => {
   assertOrchestrationQueuesIdle(idleQueues())
+  assertOrchestrationQueuesIdle(idleQueues(true))
 })
 
 void test('deployment preflight rejects active, waiting or prioritized work', () => {
@@ -28,14 +33,27 @@ void test('deployment preflight rejects active, waiting or prioritized work', ()
   }
 })
 
+void test('deployment preflight also requires the optional Rives queue to be idle', () => {
+  for (const state of ['active', 'waiting', 'prioritized'] as const) {
+    const inventory = idleQueues(true)
+    inventory.queues[2].counts[state] = 1
+    assert.throws(() => {
+      assertOrchestrationQueuesIdle(inventory)
+    })
+  }
+})
+
 void test('deployment preflight refuses missing, duplicate and unrelated queues', () => {
   const queue = idleQueues().queues[0]
+  const rives = idleQueues(true).queues[2]
   for (const value of [
     undefined,
     {},
     {queues: []},
     {queues: [queue]},
     {queues: [queue, queue]},
+    {queues: [...idleQueues().queues, rives, rives]},
+    {queues: [queue, rives]},
     {queues: [{...queue, name: 'unrelated'}, idleQueues().queues[1]]},
     {queues: [{...queue, counts: {}}, idleQueues().queues[1]]},
   ]) {
@@ -50,7 +68,7 @@ void test('deployment preflight uses only the bounded authenticated GET without 
     endpoint: 'orchestration.example.invalid',
     expectedHostname: 'orchestration.example.invalid',
     password: 'test-credential',
-    async fetcher(input, init) {
+    fetcher(input, init) {
       assert.ok(input instanceof URL)
       assert.equal(
         input.toString(),
@@ -63,7 +81,7 @@ void test('deployment preflight uses only the bounded authenticated GET without 
         'Basic b3BlcmF0b3I6dGVzdC1jcmVkZW50aWFs',
       )
       assert.ok(init?.signal)
-      return Response.json(idleQueues())
+      return Promise.resolve(Response.json(idleQueues()))
     },
   })
 })
@@ -85,9 +103,9 @@ void test('deployment preflight refuses endpoints outside the exact configured H
         endpoint,
         expectedHostname: 'orchestration.example.invalid',
         password: 'test-credential',
-        async fetcher() {
+        fetcher() {
           fetched = true
-          return Response.json(idleQueues())
+          return Promise.resolve(Response.json(idleQueues()))
         },
       }),
     )
@@ -97,11 +115,9 @@ void test('deployment preflight refuses endpoints outside the exact configured H
 
 void test('deployment preflight fails closed without exposing credentials or response bodies', async () => {
   for (const fetcher of [
-    async () => new Response('sensitive-response', {status: 401}),
-    async () => new Response('sensitive-invalid-json'),
-    async () => {
-      throw new Error('test-credential')
-    },
+    () => Promise.resolve(new Response('sensitive-response', {status: 401})),
+    () => Promise.resolve(new Response('sensitive-invalid-json')),
+    () => Promise.reject(new Error('test-credential')),
   ]) {
     await assert.rejects(
       assertRemoteOrchestrationIdle({

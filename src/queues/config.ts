@@ -9,6 +9,11 @@ export const JOBS = [
   {
     name: 'process-declaration',
   },
+  {
+    name: 'pull-rives-et-eaux',
+    cron: '0 30 3 * * *',
+    timeZone: 'Europe/Paris',
+  },
 ] as const
 
 export type JobName = (typeof JOBS)[number]['name']

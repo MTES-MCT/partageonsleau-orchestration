@@ -26,7 +26,7 @@ import {
  * configurée (`PLE_BASE_URL`, `CLIENT_ID`, `CLIENT_SECRET` tous renseignés) :
  *
  * 1. **`getAvailableServiceAccounts`** — Retourne `[CLIENT_ID]` : un seul compte
- *    service est piloté par les identifiants présents dans l’environnement.
+ * service est piloté par les identifiants présents dans l’environnement.
  * 2. **`getServiceAccountToken`** — `POST /service-accounts/token` avec
  *    `clientId` / `clientSecret` → JWT compte service.
  * 3. **`getDeclarantsForServiceAccount`** — `GET /service-accounts/me/declarants`
@@ -63,6 +63,8 @@ type DeclarantContextPayload = {
   contextId: string
   points: Array<{
     pointId: string
+    exploitationId?: string
+    countingCode?: string
     flowType?: PointFlowType
     sourcePointId: string
     connector: string
@@ -83,6 +85,8 @@ type ServiceAccountDeclarantsResponse = {
 type DeclarantContextApiResponse = {
   success: boolean
   exploitations: Array<{
+    id?: string
+    countingCode?: string | null
     point: {
       id: string
       name?: string
@@ -119,10 +123,14 @@ function isDeclarantContextPayload(
     return false
   }
 
-  return value.points.every((point) => {
-    return (
+  return value.points.every(
+    (point) =>
       isRecord(point) &&
       (point.pointId === undefined || typeof point.pointId === 'string') &&
+      (point.exploitationId === undefined ||
+        typeof point.exploitationId === 'string') &&
+      (point.countingCode === undefined ||
+        typeof point.countingCode === 'string') &&
       (point.flowType === undefined ||
         point.flowType === PointFlowType.PRELEVEMENT ||
         point.flowType === PointFlowType.REJET) &&
@@ -134,9 +142,8 @@ function isDeclarantContextPayload(
         typeof point.connectorRate === 'number') &&
       (point.mostRecentAvailableDate === undefined ||
         typeof point.mostRecentAvailableDate === 'string') &&
-      (point.sourceFile === undefined || typeof point.sourceFile === 'string')
-    )
-  })
+      (point.sourceFile === undefined || typeof point.sourceFile === 'string'),
+  )
 }
 
 function isServiceAccountDeclarantsResponse(
@@ -146,28 +153,27 @@ function isServiceAccountDeclarantsResponse(
     return false
   }
 
-  return value.data.every((item) => {
-    return (
+  return value.data.every(
+    (item) =>
       isRecord(item) &&
       typeof item.declarantUserId === 'string' &&
       (item.declarantName === undefined ||
-        typeof item.declarantName === 'string')
-    )
-  })
+        typeof item.declarantName === 'string'),
+  )
 }
 
 function isDeclarantContextApiResponse(
-  value: unknown,
-): value is DeclarantContextApiResponse {
+  response: unknown,
+): response is DeclarantContextApiResponse {
   if (
-    !isRecord(value) ||
-    typeof value.success !== 'boolean' ||
-    !Array.isArray(value.exploitations)
+    !isRecord(response) ||
+    typeof response.success !== 'boolean' ||
+    !Array.isArray(response.exploitations)
   ) {
     return false
   }
 
-  return value.exploitations.every((exploitation) => {
+  return response.exploitations.every((exploitation) => {
     if (!isRecord(exploitation) || !isRecord(exploitation.point)) {
       return false
     }
@@ -196,9 +202,13 @@ function isDeclarantContextApiResponse(
       connectors === undefined ||
       connectors === null ||
       (Array.isArray(connectors) &&
-        connectors.every((connector) => isValidConnector(connector)))
+        connectors.every((item) => isValidConnector(item)))
 
     return (
+      (exploitation.id === undefined || typeof exploitation.id === 'string') &&
+      (exploitation.countingCode === undefined ||
+        exploitation.countingCode === null ||
+        typeof exploitation.countingCode === 'string') &&
       typeof exploitation.point.id === 'string' &&
       (exploitation.point.flowType === undefined ||
         exploitation.point.flowType === PointFlowType.PRELEVEMENT ||
@@ -416,7 +426,7 @@ function normalizeTimeserieValues(metric: Timeserie): TimeserieValue[] {
   }
 
   const sortedEntries: TimeserieValue[] = []
-  for (const entry of valuesByBucket.entries()) {
+  for (const entry of valuesByBucket) {
     const value = entry[1]
     const insertIndex = sortedEntries.findIndex(
       (current) => current.date.getTime() > value.date.getTime(),
@@ -504,10 +514,10 @@ function serializePayloadDataForPost(
       values: metric.values.map((value) => ({
         ...value,
         date: value.date.toISOString(),
-        ...(value.periodStart
-          ? {periodStart: value.periodStart.toISOString()}
-          : {}),
-        ...(value.periodEnd ? {periodEnd: value.periodEnd.toISOString()} : {}),
+        ...(value.periodStart && {
+          periodStart: value.periodStart.toISOString(),
+        }),
+        ...(value.periodEnd && {periodEnd: value.periodEnd.toISOString()}),
       })),
     })),
   }
@@ -672,6 +682,8 @@ export class PartageonsLeauClient {
           contextId: context.contextId,
           points: context.points.map((point) => ({
             pointId: point.pointId,
+            exploitationId: point.exploitationId,
+            countingCode: point.countingCode,
             flowType: point.flowType,
             sourcePointId: point.sourcePointId,
             connector: point.connector,
@@ -710,11 +722,12 @@ export class PartageonsLeauClient {
         })
         .map((connector) => {
           const connectorParameters = connector.parameters ?? {}
-          const {sourceFile} = connectorParameters
-          const {sourcePointId} = connectorParameters
+          const {sourceFile, sourcePointId} = connectorParameters
 
           return {
             pointId: exploitation.point.id,
+            exploitationId: exploitation.id,
+            countingCode: exploitation.countingCode ?? undefined,
             flowType: exploitation.point.flowType,
             sourcePointId:
               typeof sourcePointId === 'string'
@@ -775,6 +788,8 @@ export class PartageonsLeauClient {
       ...serializedOutput,
       metadata: {
         point_id: pointId,
+        exploitation_id: output.exploitationId,
+        counting_code: output.countingCode,
         declarant_id: declarantId,
         context_id: contextId,
         connector_id: output.connectorId,

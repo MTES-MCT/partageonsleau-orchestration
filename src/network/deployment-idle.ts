@@ -1,6 +1,7 @@
 import {Buffer} from 'node:buffer'
 
-const queueNames = ['pull-updated-data', 'process-declaration']
+const requiredQueueNames = ['pull-updated-data', 'process-declaration']
+const queueNames = [...requiredQueueNames, 'pull-rives-et-eaux']
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -31,7 +32,7 @@ export function assertOrchestrationQueuesIdle(value: unknown): void {
     }
   }
 
-  if (names.size !== queueNames.length) {
+  if (requiredQueueNames.some((name) => !names.has(name))) {
     throw new Error('Incomplete orchestration queue inventory')
   }
 }

@@ -4,6 +4,8 @@ export type ConfigEntry = {
 
 export type ServiceAccountPointContext = {
   pointId: string
+  exploitationId?: string
+  countingCode?: string
   flowType?: PointFlowType
   sourcePointId: string
   connector: string
@@ -25,6 +27,8 @@ export type DeclarantContext = {
 
 export type ConnectorRunContext = {
   serviceAccount: string
+  exploitationId?: string
+  countingCode?: string
   flowType?: PointFlowType
   sourcePointId: string
   connectorId?: string
@@ -96,6 +100,8 @@ export enum ConflictPolicy {
 
 export type Timeserie = {
   type: MetricType
+  exploitationId?: string
+  countingCode?: string
   usage?: WaterUseCode
   granularity: Granularity
   conflictPolicy: ConflictPolicy
@@ -105,6 +111,8 @@ export type Timeserie = {
 
 export type ParsedPointPayload = {
   id_point_de_prelevement: string
+  exploitationId?: string
+  countingCode?: string
   flow_type?: PointFlowType
   source_type: SourceType
   source_metadata: Record<string, unknown> | undefined
@@ -115,6 +123,8 @@ export type ParsedPointPayload = {
 
 export type ConnectorOutput = {
   connector: string
+  exploitationId?: string
+  countingCode?: string
   serviceAccount: string
   sourcePointId: string
   connectorId?: string

@@ -13,6 +13,7 @@ import {
 } from './types.js'
 import {BaseConnector} from './base-connector.js'
 import {
+  getSpreadsheetCellText,
   normalizePointIdentifier,
   parseDeclarationDate,
   parseDeclarationNumber,
@@ -33,6 +34,7 @@ type TemplateFileRowInput = Record<string, unknown> & {
 
 type TemplateFileRawRow = {
   sourcePointId: string
+  countingCode?: string
   flowType?: PointFlowType
   metricType: MetricType.VOLUME
   usage?: WaterUseCode
@@ -67,6 +69,7 @@ const VOLUME_COLUMNS = [
   {name: 'volume_rejete_m3', flowType: PointFlowType.REJET},
 ] as const
 const USAGE_COLUMN = 'usage'
+const COUNTING_CODE_COLUMNS = ['code_comptage', 'Code comptage'] as const
 const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000
 
 /**
@@ -85,9 +88,10 @@ export function normalizeTemplateDateOnly(rawDate: unknown): Date | undefined {
     return undefined
   }
 
+  const timezoneOffsetMilliseconds = parsedDate.getTimezoneOffset() * 60 * 1000
   const timezoneNeutralTimestamp =
     rawDate instanceof Date
-      ? parsedDate.getTime() - parsedDate.getTimezoneOffset() * 60 * 1000
+      ? parsedDate.getTime() - timezoneOffsetMilliseconds
       : parsedDate.getTime()
 
   return new Date(
@@ -101,7 +105,8 @@ export function getExclusiveTemplatePeriodEnd(dateEnd: Date): Date {
 }
 
 function getUtcMonthIndex(date: Date): number {
-  return date.getUTCFullYear() * 12 + date.getUTCMonth()
+  const yearMonths = date.getUTCFullYear() * 12
+  return yearMonths + date.getUTCMonth()
 }
 
 export function inferTemplateGranularity(
@@ -111,13 +116,13 @@ export function inferTemplateGranularity(
   const periodEnd = getExclusiveTemplatePeriodEnd(inclusiveDateEnd)
   const durationDays =
     (periodEnd.getTime() - dateStart.getTime()) / MILLISECONDS_PER_DAY
-  const startsOnFirstDay = dateStart.getUTCDate() === 1
-  const endsBeforeFirstDay = periodEnd.getUTCDate() === 1
+  const isStartsOnFirstDay = dateStart.getUTCDate() === 1
+  const isEndsBeforeFirstDay = periodEnd.getUTCDate() === 1
   const monthCount = getUtcMonthIndex(periodEnd) - getUtcMonthIndex(dateStart)
 
   if (
-    startsOnFirstDay &&
-    endsBeforeFirstDay &&
+    isStartsOnFirstDay &&
+    isEndsBeforeFirstDay &&
     dateStart.getUTCMonth() === 0 &&
     monthCount === 12
   ) {
@@ -125,15 +130,15 @@ export function inferTemplateGranularity(
   }
 
   if (
-    startsOnFirstDay &&
-    endsBeforeFirstDay &&
+    isStartsOnFirstDay &&
+    isEndsBeforeFirstDay &&
     dateStart.getUTCMonth() % 3 === 0 &&
     monthCount === 3
   ) {
     return Granularity.QUARTER
   }
 
-  if (startsOnFirstDay && endsBeforeFirstDay && monthCount === 1) {
+  if (isStartsOnFirstDay && isEndsBeforeFirstDay && monthCount === 1) {
     return Granularity.MONTH
   }
 
@@ -161,6 +166,15 @@ function parseTemplateVolumeRow(
   row: TemplateFileRowInput,
 ): TemplateFileRawRow | undefined {
   const sourcePointId = getSourcePointId(row)
+  const countingCodes = COUNTING_CODE_COLUMNS.flatMap((column) => {
+    const code = getSpreadsheetCellText(row[column])
+    return code ? [code] : []
+  })
+  if (new Set(countingCodes).size > 1) {
+    throw new Error(
+      `[template_file] Plusieurs codes comptage contradictoires pour le point "${sourcePointId ?? 'inconnu'}".`,
+    )
+  }
   const dateStart = normalizeTemplateDateOnly(row[DATE_START_COLUMN])
   const dateEnd = normalizeTemplateDateOnly(row[DATE_END_COLUMN])
   const usageResolution = resolveTemplateWaterUse(row[USAGE_COLUMN])
@@ -190,6 +204,7 @@ function parseTemplateVolumeRow(
 
   return {
     sourcePointId,
+    countingCode: countingCodes[0],
     flowType: volume.flowType,
     metricType: MetricType.VOLUME,
     usage: usageResolution.code,
@@ -198,9 +213,9 @@ function parseTemplateVolumeRow(
     periodEnd: getExclusiveTemplatePeriodEnd(dateEnd),
     granularity: inferTemplateGranularity(dateStart, dateEnd),
     value: volume.value,
-    ...(usageResolution.status === 'unknown'
-      ? {unknownUsageValue: usageResolution.rawValue}
-      : {}),
+    ...(usageResolution.status === 'unknown' && {
+      unknownUsageValue: usageResolution.rawValue,
+    }),
   }
 }
 
@@ -249,7 +264,7 @@ export class TemplateFileConnector extends BaseConnector<
     const {rows} = await readSpreadsheetSheet<TemplateFileRowInput>(
       filePath,
       TEMPLATE_SHEET_NAME,
-      {connectorName: this.name},
+      {connectorName: this.name, textColumns: COUNTING_CODE_COLUMNS},
     )
 
     console.log(
@@ -289,10 +304,38 @@ export class TemplateFileConnector extends BaseConnector<
       availableSourcePointIds.slice(0, 10),
     )
 
-    const matchingRows = parsedRows.filter(
+    const pointRows = parsedRows.filter(
       (row) =>
         normalizePointIdentifier(row.sourcePointId) === normalizedSourcePointId,
     )
+    const codedIdentities = new Set(
+      pointRows.flatMap((row) => (row.countingCode ? [row.countingCode] : [])),
+    )
+    if (
+      context.connectorId &&
+      codedIdentities.size > 1 &&
+      pointRows.some((row) => !row.countingCode)
+    ) {
+      throw new Error(
+        `[template_file] Une ligne sans code comptage est ambiguë parmi plusieurs comptages pour le point "${context.sourcePointId}".`,
+      )
+    }
+    const matchingRows = pointRows.filter(
+      (row) =>
+        !context.countingCode ||
+        !row.countingCode ||
+        row.countingCode === context.countingCode,
+    )
+
+    if (
+      context.connectorId &&
+      !context.countingCode &&
+      new Set(matchingRows.map((row) => row.countingCode ?? null)).size > 1
+    ) {
+      throw new Error(
+        `[template_file] Plusieurs comptages pour le point "${context.sourcePointId}" : le code comptage du connecteur doit être renseigné.`,
+      )
+    }
 
     const explicitFlowTypes = new Set(
       matchingRows.flatMap((row) => (row.flowType ? [row.flowType] : [])),
@@ -352,6 +395,7 @@ export class TemplateFileConnector extends BaseConnector<
       string,
       {
         type: MetricType
+        countingCode?: string
         usage: WaterUseCode | undefined
         granularity: Granularity
         values: TimeserieValue[]
@@ -359,9 +403,15 @@ export class TemplateFileConnector extends BaseConnector<
     >()
 
     for (const record of parsedData.records) {
-      const key = `${record.metricType}__${record.usage ?? 'NO_USAGE'}__${record.granularity}`
+      const key = JSON.stringify([
+        record.countingCode ?? null,
+        record.metricType,
+        record.usage ?? null,
+        record.granularity,
+      ])
       const group = byTypeAndUsage.get(key) ?? {
         type: record.metricType,
+        countingCode: record.countingCode,
         usage: record.usage,
         granularity: record.granularity,
         values: [],
@@ -378,9 +428,10 @@ export class TemplateFileConnector extends BaseConnector<
     }
 
     const metrics = [...byTypeAndUsage.values()].map(
-      ({type, usage, granularity, values}) => ({
+      ({type, countingCode, usage, granularity, values}) => ({
         type,
-        ...(usage ? {usage} : {}),
+        ...(countingCode && {countingCode}),
+        ...(usage && {usage}),
         granularity,
         conflictPolicy: TemplateFileConnector.metric.conflictPolicy,
         values,
@@ -414,14 +465,12 @@ export class TemplateFileConnector extends BaseConnector<
         provider: 'template_file',
         sheet_name: TEMPLATE_SHEET_NAME,
         row_count: parsedData.records.length,
-        ...(unknownUsageValues.length > 0
-          ? {
-              unknown_usage_count: parsedData.records.filter(
-                (record) => record.unknownUsageValue,
-              ).length,
-              unknown_usage_values: unknownUsageValues,
-            }
-          : {}),
+        ...(unknownUsageValues.length > 0 && {
+          unknown_usage_count: parsedData.records.filter(
+            (record) => record.unknownUsageValue,
+          ).length,
+          unknown_usage_values: unknownUsageValues,
+        }),
       },
       min_date: minDate,
       max_date: maxDate,

@@ -3,6 +3,7 @@ import * as Sentry from '@sentry/node'
 import {connectorRegistry} from '../connectors/index.js'
 import {pullUpdatedData} from '../jobs/pull_updated_data.js'
 import {processDeclaration} from '../jobs/process-declaration.js'
+import {pullRivesEtEaux} from '../jobs/pull-rives-et-eaux.js'
 import {getConnection, JOBS} from './config.js'
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
@@ -10,12 +11,14 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
 }
 
 const handlers: Record<string, (job: Job<unknown>) => Promise<void>> = {
-  // eslint-disable-next-line @typescript-eslint/naming-convention
+  async 'pull-rives-et-eaux'() {
+    await pullRivesEtEaux()
+  },
+
   async 'pull-updated-data'(_job) {
     await pullUpdatedData(connectorRegistry)
   },
 
-  // eslint-disable-next-line @typescript-eslint/naming-convention
   async 'process-declaration'(job) {
     if (!isObjectRecord(job.data)) {
       throw new Error('[process-declaration] Missing declarationId')

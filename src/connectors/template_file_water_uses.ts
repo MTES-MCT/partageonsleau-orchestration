@@ -114,9 +114,11 @@ function normalizeTemplateWaterUseLabel(value: string): string {
     .trim()
     .normalize('NFD')
     .replaceAll(/\p{Diacritic}/gv, '')
-    .replaceAll(/[’‘`´]/gv, "'")
+    .replaceAll(/[`´‘’]/gv, "'")
     .replaceAll(/[‐‑‒–—]/gv, '-')
-    .replaceAll(/\s*%\s*/gv, '%')
+    .split('%')
+    .map((part) => part.trim())
+    .join('%')
     .replaceAll(/\s+/gv, ' ')
     .toLocaleUpperCase('fr-FR')
 }
@@ -143,8 +145,9 @@ function buildUnambiguousAliasMap(): ReadonlyMap<string, WaterUseCode> {
 }
 
 const WATER_USE_CODE_BY_ALIAS = buildUnambiguousAliasMap()
+// Whitespace has already been trimmed and collapsed to one ordinary space.
 const CODE_PREFIX_PATTERN =
-  /^(\d{1,2}(?:[A-Z](?:\d+)?)?)(?:\s*(?:-|–|—|·|:)\s*.+)?$/v
+  /^(?<code>\d{1,2}(?:[A-Z]\d*)?)(?: ?[\-:·–—] ?\S.*)?$/v
 
 export function resolveTemplateWaterUse(
   rawUsage: unknown,
@@ -160,7 +163,7 @@ export function resolveTemplateWaterUse(
   }
 
   const normalizedValue = normalizeTemplateWaterUseLabel(rawValue)
-  const prefixedCode = CODE_PREFIX_PATTERN.exec(normalizedValue)?.[1]
+  const prefixedCode = CODE_PREFIX_PATTERN.exec(normalizedValue)?.groups?.code
 
   if (prefixedCode && TEMPLATE_WATER_USE_CODES.has(prefixedCode)) {
     return {code: prefixedCode, status: 'matched'}
