@@ -26,7 +26,9 @@ ENV NODE_ENV=production
 ENV NODE_OPTIONS=--use-openssl-ca
 ENV PORT=4000
 
-RUN apk add --no-cache dumb-init ca-certificates
+RUN apk add --no-cache dumb-init ca-certificates \
+  && rm -rf /usr/local/lib/node_modules/npm /opt/yarn-* \
+  && rm -f /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/yarn /usr/local/bin/yarnpkg
 
 
 COPY package.json package-lock.json .npmrc ./
