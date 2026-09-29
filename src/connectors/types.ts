@@ -13,6 +13,7 @@ export type ServiceAccountPointContext = {
   connectorRate: number
   mostRecentAvailableDate: Date | undefined
   sourceFile?: string
+  connectorParameters?: Record<string, unknown>
 }
 
 export type ServiceAccountContext = {
@@ -36,6 +37,7 @@ export type ConnectorRunContext = {
   mostRecentAvailableDate: Date | undefined
   sourceFile?: string
   sourceFiles?: ConnectorSourceFile[]
+  connectorParameters?: Record<string, unknown>
 }
 
 export type ConnectorDiscoveryContext = {

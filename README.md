@@ -59,6 +59,8 @@ Copier `.env.example` vers `.env` et renseigner les variables.
 | `PLE_WEBHOOK_SECRET` | Secret HMAC pour valider `X-PLE-Signature` sur `/hooks/declarations` |
 | `WILLIE_API_TOKEN` | Bearer pour l’API Willie |
 | `ORANGE_LIVE_OBJECTS_API_KEY` | Clé API Orange Live Objects |
+| `EVELER_API_IDENTIFIER` / `EVELER_API_SECRET` | Identifiants secrets Eveler ; leur présence active les points Eveler du pull quotidien |
+| `EVELER_API_BASE_URL` | Origine autorisée Eveler : `https://api.eveler.pro` uniquement |
 | `SENTRY_DSN` / `SENTRY_ENV` | Télémétrie Sentry (optionnel) |
 | `BULLBOARD_PASSWORD` | Mot de passe pour activer BullBoard (dashboard BullMQ) |
 
@@ -149,6 +151,77 @@ ont un timeout et refusent les redirections ; les erreurs n'exposent ni clé ni
 corps des réponses. Le nouveau chemin ne passe pas par le connecteur générique
 par PP et n'applique pas `connector.rate`.
 
+### Eveler
+
+Le connecteur `eveler` passe par le pull quotidien existant et le transport
+générique `/service-accounts/connectors/ingest`. Son paramétrage d'exploitation
+contient `sourcePointId` (identifiant humain fournisseur de l'URL, conservé sous
+forme de chaîne), `sourceMeterId` (identifiant interne fournisseur de 24 caractères
+hexadécimaux, vérifié contre `data.meter_id`) et `sourceStartDate` (début de collecte ISO avec fuseau, par exemple
+`2026-01-01T00:00:00Z`). Les identifiants et secrets restent exclusivement en
+environnement. Avant de les renseigner, vérifier le quota fournisseur, la cible
+PLE et les données qui chevauchent la fenêtre. Les identifiants PLE existants
+sont réutilisés. Aucun appel Eveler n'est fait par le pull si les deux variables
+fournisseur ne sont pas renseignées.
+
+Seul le canal `volume` est lu en `m3`, précision 4 et pas de 600 secondes.
+Les timestamps décrivent la **fin** des intervalles. Six intervalles distincts
+complets donnent un volume horaire avec bornes explicites UTC `[H,H+1h)`.
+Un doublon identique ne compte qu'une fois ; les doublons contradictoires,
+valeurs négatives ou invalides rendent l'heure concernée incomplète. Les heures
+incomplètes sont exclues et comptées dans les métadonnées et journaux agrégés.
+Zéro est une valeur valide. Aucun index, canal importé ou volume interpolé
+n'est utilisé. La dernière heure encore ouverte attend le passage suivant.
+
+La première collecte commence à la première heure entière à partir de
+`sourceStartDate`. Si cette date est dérivée du premier échantillon fournisseur,
+tenir compte de sa signification de **fin** d'intervalle (un premier échantillon
+à 00:10 peut permettre une heure commençant à 00:00). Les passages suivants
+repartent de `mostRecentAvailableDate - 7 jours`, borné par cette date initiale.
+Le curseur est celui de l'exploitation : les anciens trous nécessitent un rejeu
+ciblé s'ils sortent de cette fenêtre. Les requêtes sont découpées en fenêtres
+de 364 jours au plus, plus une marge journalière pour inclure l'échantillon de
+fin ; au maximum 30 fenêtres sont acceptées. Les lignes hors fenêtre ne sont
+jamais publiées.
+
+Le payload porte `volume`, `m3`, `1 hour` et `SKIP_CONFLICTING_VALUES`.
+Un rejeu ajoute les heures absentes et préserve les périodes déjà présentes,
+y compris leurs anciennes valeurs si le fournisseur les a corrigées. Il ne
+prouve pas que les valeurs ignorées étaient identiques : vérifier séparément
+les corrections et les chevauchements avec d'autres sources. L'acquittement
+PLE distingue les lots importés des valeurs ignorées. Une erreur fournisseur
+ou un acquittement invalide fait échouer le job après traitement des autres
+points ; les tentatives BullMQ peuvent le reprendre sans remplacer l'existant.
+Les erreurs 429/503 ne déclenchent pas de boucle de requêtes immédiate. Le
+jeton fournisseur est réutilisé 55 minutes et renouvelé une seule fois après
+un 401. Toutes les requêtes Eveler, y compris l'authentification, sont espacées
+d'au moins 1,1 seconde via une porte commune au processus. Cette limite ne
+coordonne pas des processus ou environnements distincts. Les appels natifs
+préservent proxy/TLS/DNS, refusent les redirections et
+expirent après 30 secondes ; les erreurs n'exposent pas les secrets ni les corps.
+
+Le rejeu manuel nécessite **un seul connecteur et un déclarant**, avec bornes
+UTC horaires explicites. Le mode par défaut lit PLE et Eveler mais n'ingère rien :
+
+```bash
+npm run replay:eveler -- --env-file /private/testing.env \
+  --connector CONNECTOR_UUID --declarant DECLARANT_UUID \
+  --start 2026-01-01T00:00:00Z --end 2026-02-01T00:00:00Z \
+  --cache-dir /private/eveler-cache
+```
+
+Ajouter `--apply` pour ingérer sur l'API configurée. Le cache facultatif contient
+les réponses de volume brutes privées (répertoire créé en 0700, fichiers en
+0600), sans jeton d'authentification ; le conserver hors Git. Il est indexé par
+origine, point, fenêtre demandée, canal et précision, indépendamment de la cible
+PLE. Réutiliser les **mêmes bornes** avec `--cache-only` pour une vérification ou
+une ingestion dans l'autre environnement sans nouveau chargement fournisseur.
+Un cache manquant ou invalide arrête le rejeu ; le cache ne se rafraîchit pas
+automatiquement. Un répertoire distinct permet une nouvelle lecture volontaire.
+En cas d'échec partiel, relancer les mêmes bornes : les lots précédemment
+acquittés sont protégés par la politique de conflit. Le résumé affiche les heures
+complètes, incomplètes, invalides et ignorées ; un échec rend le code de sortie 1.
+
 ## Architecture (fichiers)
 
 - `index.ts` — importe et démarre `src/server.ts`
@@ -169,7 +242,7 @@ par PP et n'applique pas `connector.rate`.
 
 Le [registre](src/connectors/index.ts) comprend :
 
-- API : `willie`, `orange_live_objects`, `omniscient_murgat`.
+- API : `willie`, `orange_live_objects`, `omniscient_murgat`, `eveler`.
 - Fichiers : `aquasys`, `bv_tech`, `template_file`, `smnpr`, `gidaf`.
 
 ## Contrat de sortie connecteur

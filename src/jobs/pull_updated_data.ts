@@ -1,8 +1,9 @@
 import {type BaseConnector} from '../connectors/base-connector.js'
+import {EvelerClient} from '../connectors/eveler.js'
 import {type ServiceAccountPointContext} from '../connectors/types.js'
 import {PartageonsLeauClient} from '../services/partageonsleau-client.js'
 
-async function processPoint(parameters: {
+export async function processPoint(parameters: {
   connectorRegistry: Map<string, BaseConnector<unknown, unknown>>
   partageonsLeauClient: PartageonsLeauClient
   serviceAccount: string
@@ -32,9 +33,17 @@ async function processPoint(parameters: {
     sourcePointId,
     mostRecentAvailableDate,
     sourceFile,
+    connectorParameters,
   } = point
 
   const connector = connectorRegistry.get(connectorName)
+
+  if (connectorName === 'eveler' && !EvelerClient.isConfigured()) {
+    console.log(
+      '[PullUpdatedData] Eveler disabled: provider credentials are not configured.',
+    )
+    return
+  }
 
   if (!connector) {
     console.error(
@@ -54,20 +63,45 @@ async function processPoint(parameters: {
       rate: connectorRate,
       mostRecentAvailableDate,
       sourceFile,
+      connectorParameters,
     })
 
-    await partageonsLeauClient.ingest({
+    if (
+      connectorName === 'eveler' &&
+      output.data.metrics.every((metric) => metric.values.length === 0)
+    ) {
+      console.log('[PullUpdatedData] Eveler: no complete hours to ingest.')
+      return
+    }
+
+    const acknowledgement = await partageonsLeauClient.ingest({
       output,
       pointId,
       declarantId,
       contextId,
       serviceAccountToken,
+      ...(connectorName === 'eveler' && {requireAcknowledgement: true}),
     })
+
+    if (connectorName === 'eveler') {
+      if (!acknowledgement) {
+        throw new Error(
+          '[PullUpdatedData] Missing Eveler ingestion acknowledgement.',
+        )
+      }
+      console.log(
+        `[PullUpdatedData] Eveler acknowledged: imported=${acknowledgement.imported}, skippedValues=${acknowledgement.skippedValues}`,
+      )
+      return
+    }
 
     console.log(
       `[PullUpdatedData] Données ingérées pour le point source : ${sourcePointId}`,
     )
   } catch (error) {
+    if (connectorName === 'eveler') {
+      throw error
+    }
     console.error(
       `[PullUpdatedData] Échec de l'exécution du connecteur pour le point source ${sourcePointId} :`,
       error,
@@ -93,6 +127,7 @@ export async function pullUpdatedData(
     `[PullUpdatedData] Nombre de comptes service trouvés : ${availableServiceAccounts.length}`,
   )
 
+  let evelerFailures = 0
   for (const serviceAccount of availableServiceAccounts) {
     console.log(`[PullUpdatedData] Auth service account : ${serviceAccount}`)
 
@@ -137,17 +172,28 @@ export async function pullUpdatedData(
         )
 
         for (const point of context.points) {
-          await processPoint({
-            connectorRegistry,
-            partageonsLeauClient,
-            serviceAccount,
-            serviceAccountToken,
-            declarantId: declarant.id,
-            contextId: context.contextId,
-            point,
-          })
+          try {
+            await processPoint({
+              connectorRegistry,
+              partageonsLeauClient,
+              serviceAccount,
+              serviceAccountToken,
+              declarantId: declarant.id,
+              contextId: context.contextId,
+              point,
+            })
+          } catch (error) {
+            if (point.connector !== 'eveler') throw error
+            evelerFailures++
+            console.error('[PullUpdatedData] Eveler failed:', error)
+          }
         }
       }
     }
+  }
+  if (evelerFailures > 0) {
+    throw new Error(
+      `[PullUpdatedData] ${evelerFailures} Eveler connector(s) failed.`,
+    )
   }
 }
