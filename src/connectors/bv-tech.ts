@@ -1,4 +1,4 @@
-import xlsx from 'xlsx'
+import xlsx from './xlsx.js'
 import {BaseConnector} from './base-connector.js'
 import {
   ConflictPolicy,
@@ -90,14 +90,14 @@ function getCellText(value: unknown): string | undefined {
 function normalizeText(value: string): string {
   return value
     .normalize('NFD')
-    .replaceAll(/[\u0300-\u036F]/gv, '')
+    .replaceAll(/[\u{300}-\u{36F}]/gv, '')
     .replaceAll(/\s+/gv, ' ')
     .trim()
     .toLowerCase()
 }
 
 function normalizeIdentifier(value: string): string {
-  const normalized = normalizeText(value).replaceAll(/[^a-z0-9]/gv, '')
+  const normalized = normalizeText(value).replaceAll(/[^0-9a-z]/gv, '')
 
   if (/^\d+$/v.test(normalized)) {
     return normalized.replace(/^0+/v, '') || '0'
@@ -435,6 +435,9 @@ function readWorksheetCandidates(
     const rows = xlsx.utils.sheet_to_json<unknown[]>(worksheet, {
       header: 1,
       raw: true,
+      // Like numeric/text dates, keep the Excel calendar day and time in UTC.
+      // Localizing midnight here would assign daily volumes to J-2, not J-1.
+      UTC: true,
       blankrows: false,
     })
     const pointColumns = findPointColumnsInRows(sheetName, rows)
@@ -655,10 +658,8 @@ function getMedianDebitIntervalMilliseconds(samples: DebitSample[]): number {
   }
 
   differences.sort((left, right) => left - right)
-  return (
-    differences[Math.floor(differences.length / 2)] ??
-    DEFAULT_DEBIT_INTERVAL_MINUTES * 60 * 1000
-  )
+  const fallbackMilliseconds = DEFAULT_DEBIT_INTERVAL_MINUTES * 60 * 1000
+  return differences[Math.floor(differences.length / 2)] ?? fallbackMilliseconds
 }
 
 function buildDailyVolumeValuesFromDebit(
@@ -705,7 +706,7 @@ function buildDailyVolumeValuesFromDebit(
   }
 
   return sortValuesByDate(
-    [...valuesByDay.entries()].map(([dayKey, value]) => ({
+    [...valuesByDay].map(([dayKey, value]) => ({
       date: new Date(dayKey),
       value,
     })),
@@ -747,7 +748,7 @@ function buildDebitValues(
   }
 
   return sortValuesByDate(
-    [...buckets.entries()].flatMap(([bucketKey, aggregate]) =>
+    [...buckets].flatMap(([bucketKey, aggregate]) =>
       aggregate.count > 0
         ? [
             {

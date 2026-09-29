@@ -31,8 +31,8 @@ const EXPECTED_HEADERS = [
   DATE_END_COLUMN,
   VOLUME_COLUMN,
 ] as const
-const BSS_ID_PATTERN = /^BSS[A-Z\d]+$/v
-const SOURCE_POINT_SEPARATOR_PATTERN = /[,;\n]+/v
+const BSS_ID_PATTERN = /^BSS[\dA-Z]+$/v
+const SOURCE_POINT_SEPARATOR_PATTERN = /[\n,;]+/v
 
 type SmnprRowInput = SpreadsheetRow & {
   id_point_de_prelevement_ou_rejet?: string | number

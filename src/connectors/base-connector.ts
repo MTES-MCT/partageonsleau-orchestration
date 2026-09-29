@@ -15,9 +15,47 @@ export abstract class BaseConnector<TRawData, TParsedData> {
     const rawData = await this.fetch(context)
     const parsedSourceData = await this.parse(rawData, context)
     const parsedData = await this.process(parsedSourceData, context)
+    if (
+      (context.exploitationId &&
+        parsedData.exploitationId &&
+        context.exploitationId !== parsedData.exploitationId) ||
+      (context.countingCode &&
+        parsedData.countingCode &&
+        context.countingCode !== parsedData.countingCode)
+    ) {
+      throw new Error(
+        `[${this.name}] L'identité du comptage ne correspond pas à l'exploitation du connecteur.`,
+      )
+    }
+    const metrics = parsedData.metrics.map((metric) => {
+      if (
+        (context.exploitationId &&
+          metric.exploitationId &&
+          context.exploitationId !== metric.exploitationId) ||
+        (context.countingCode &&
+          metric.countingCode &&
+          context.countingCode !== metric.countingCode)
+      ) {
+        throw new Error(
+          `[${this.name}] L'identité du comptage ne correspond pas à l'exploitation du connecteur.`,
+        )
+      }
+
+      return {
+        ...metric,
+        ...((metric.exploitationId ?? context.exploitationId) && {
+          exploitationId: metric.exploitationId ?? context.exploitationId,
+        }),
+        ...((metric.countingCode ?? context.countingCode) && {
+          countingCode: metric.countingCode ?? context.countingCode,
+        }),
+      }
+    })
 
     return {
       connector: this.name,
+      ...(context.exploitationId && {exploitationId: context.exploitationId}),
+      ...(context.countingCode && {countingCode: context.countingCode}),
       serviceAccount: context.serviceAccount,
       sourcePointId: context.sourcePointId,
       connectorId: context.connectorId,
@@ -25,7 +63,10 @@ export abstract class BaseConnector<TRawData, TParsedData> {
       lastRunAt: new Date(),
       data: {
         ...parsedData,
+        ...(context.exploitationId && {exploitationId: context.exploitationId}),
+        ...(context.countingCode && {countingCode: context.countingCode}),
         flow_type: parsedData.flow_type ?? context.flowType,
+        metrics,
       },
     }
   }
