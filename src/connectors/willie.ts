@@ -42,6 +42,25 @@ type WillieRawConsumptionResponse = {
   unknownStationIds: string[]
 }
 
+type WillieFetchedResponse = {
+  body: unknown
+  completedBeforeDay: string
+}
+
+const parisDayFormatter = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Europe/Paris',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+})
+
+function parisDay(now: Date): string {
+  const parts = parisDayFormatter.formatToParts(now)
+  const part = (type: string) =>
+    parts.find((value) => value.type === type)?.value
+  return `${part('year')}-${part('month')}-${part('day')}`
+}
+
 const willieResolutionByGranularity = {
   [Granularity.HOUR]: 'hour',
   [Granularity.DAY]: 'day',
@@ -121,7 +140,7 @@ function assertAndGetStationForPoint(
 }
 
 export class WillieConnector extends BaseConnector<
-  unknown,
+  WillieFetchedResponse,
   WillieConsumptionResponse
 > {
   private static readonly endpoint =
@@ -137,11 +156,13 @@ export class WillieConnector extends BaseConnector<
   // Idéalement configurable par clé d'API (incompatible avec le modèle actuel)
   private static readonly connectorEnabledDate = new Date('2026-01-01')
 
-  constructor() {
+  constructor(private readonly options: {now?: () => Date} = {}) {
     super('willie')
   }
 
-  protected async fetch(context: ConnectorRunContext): Promise<unknown> {
+  protected async fetch(
+    context: ConnectorRunContext,
+  ): Promise<WillieFetchedResponse> {
     const apiToken = process.env.WILLIE_API_TOKEN
     if (!apiToken) {
       throw new Error(
@@ -149,13 +170,36 @@ export class WillieConnector extends BaseConnector<
       )
     }
 
+    // Freeze the cutoff before the request: a slow response across midnight
+    // must not turn a still-partial provider day into an admissible full day.
+    const now = this.options.now?.() ?? new Date()
+    const completedBeforeDay = parisDay(now)
+    const lastCompletedDay = new Date(`${completedBeforeDay}T00:00:00Z`)
+    lastCompletedDay.setUTCDate(lastCompletedDay.getUTCDate() - 1)
+    if (lastCompletedDay < WillieConnector.connectorEnabledDate) {
+      return {
+        body: {
+          stations: [{stationID: context.sourcePointId, datapoints: []}],
+          count: 0,
+          unknownStationIds: [],
+        },
+        completedBeforeDay,
+      }
+    }
+    const cursor = this.resolveStartDate({
+      mostRecentAvailableDate: context.mostRecentAvailableDate,
+      connectorEnabledDate: WillieConnector.connectorEnabledDate,
+    })
+    // Older pulls may have advanced the cursor beyond today after receiving a
+    // partial day. Re-read the last closed day without replacing stored values.
+    const startDate =
+      context.mostRecentAvailableDate && cursor > lastCompletedDay
+        ? lastCompletedDay
+        : cursor
     const query = new URLSearchParams({
       stationIds: context.sourcePointId,
-      startDate: this.resolveStartDate({
-        mostRecentAvailableDate: context.mostRecentAvailableDate,
-        connectorEnabledDate: WillieConnector.connectorEnabledDate,
-      }).toISOString(),
-      endDate: new Date().toISOString(),
+      startDate: startDate.toISOString(),
+      endDate: now.toISOString(),
       resolution: granularityToWillieResolution(
         WillieConnector.metric.granularity,
       ),
@@ -175,13 +219,15 @@ export class WillieConnector extends BaseConnector<
       )
     }
 
-    return response.json()
+    const body: unknown = await response.json()
+    return {body, completedBeforeDay}
   }
 
   protected async parse(
-    rawData: unknown,
+    fetched: WillieFetchedResponse,
     context: ConnectorRunContext,
   ): Promise<WillieConsumptionResponse> {
+    const rawData = fetched.body
     if (!isWillieRawConsumptionResponse(rawData)) {
       throw new Error(
         `[${this.name}] Invalid Willie response format for service account "${context.serviceAccount}" and source point "${context.sourcePointId}".`,
@@ -201,6 +247,11 @@ export class WillieConnector extends BaseConnector<
             console.warn(
               `[${this.name}] Invalid Willie datapoint date "${datapoint.dateTime}" for station "${station.stationID}" (service account "${context.serviceAccount}").`,
             )
+            return undefined
+          }
+          if (
+            dateTime.toISOString().slice(0, 10) >= fetched.completedBeforeDay
+          ) {
             return undefined
           }
 
@@ -225,7 +276,7 @@ export class WillieConnector extends BaseConnector<
     const droppedDatapointCount = rawDatapointCount - parsedDatapointCount
     if (droppedDatapointCount > 0) {
       console.warn(
-        `[${this.name}] Dropped ${droppedDatapointCount} datapoints with null consumption or invalid date for service account "${context.serviceAccount}" and source point "${context.sourcePointId}".`,
+        `[${this.name}] Dropped ${droppedDatapointCount} null, invalid or incomplete daily datapoints for service account "${context.serviceAccount}" and source point "${context.sourcePointId}".`,
       )
     }
 

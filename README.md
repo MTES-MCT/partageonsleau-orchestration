@@ -161,6 +161,13 @@ transmis à l'API, qui applique la répartition. `SKIP_CONFLICTING_VALUES` compl
 les périodes manquantes et conserve les valeurs existantes, même si le fournisseur
 les a corrigées. Un accusé absent ou incohérent fait échouer le pull.
 
+Seules les journées terminées en `Europe/Paris` sont admises. La borne est figée
+avant chaque requête, même si la réponse arrive après minuit ; les journées en
+cours ou futures sont exclues. Si un ancien lot a avancé le curseur trop loin,
+le pull relit le dernier jour clos sans écraser l'existant. Les anciennes valeurs
+importées avant la fin d'une journée restent donc inchangées : leur correction
+éventuelle nécessite une décision et une reprise distinctes.
+
 Le rejeu manuel cible un seul connecteur et son déclarant, sans démarrer de
 worker ni appeler Willie. Préparer préalablement un cache privé hors Git :
 `STATION_UUID.response.json` contient la réponse fournisseur brute et

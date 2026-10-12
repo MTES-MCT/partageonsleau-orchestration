@@ -5,6 +5,8 @@ import {ConflictPolicy} from './types.js'
 import {processPoint} from '../jobs/pull_updated_data.js'
 import {PartageonsLeauClient} from '../services/partageonsleau-client.js'
 
+const fixedClock = {now: () => new Date('2026-11-01T03:00:00Z')}
+
 void test('Willie conserve zéro, écarte les absences et complète les valeurs manquantes lors du rejeu', async (t) => {
   const previous = process.env.WILLIE_API_TOKEN
   process.env.WILLIE_API_TOKEN = 'synthetic'
@@ -34,7 +36,7 @@ void test('Willie conserve zéro, écarte les absences et complète les valeurs 
       }),
     )
   })
-  const result = await new WillieConnector().run({
+  const result = await new WillieConnector(fixedClock).run({
     serviceAccount: 'synthetic',
     sourcePointId: 'synthetic-station',
     rate: 100,
@@ -86,7 +88,7 @@ void test('le pull Willie distingue un lot vide, un rejeu acquitté et un échec
     },
   )
   const parameters = {
-    connectorRegistry: new Map([['willie', new WillieConnector()]]),
+    connectorRegistry: new Map([['willie', new WillieConnector(fixedClock)]]),
     partageonsLeauClient: client,
     serviceAccount: 'synthetic',
     serviceAccountToken: 'synthetic',
@@ -133,7 +135,7 @@ void test('Willie explicite les journées UTC historiques, y compris aux changem
       }),
     ),
   )
-  const result = await new WillieConnector().run({
+  const result = await new WillieConnector(fixedClock).run({
     serviceAccount: 'synthetic',
     sourcePointId: 'synthetic-station',
     rate: 100,
@@ -227,7 +229,7 @@ void test('le vrai client valide les bornes Willie importées, les jours partiel
       }),
     )
   })
-  const output = await new WillieConnector().run({
+  const output = await new WillieConnector(fixedClock).run({
     serviceAccount: 'synthetic',
     sourcePointId: 'synthetic-station',
     rate: 100,
@@ -262,4 +264,220 @@ void test('le vrai client valide les bornes Willie importées, les jours partiel
     client.ingest(parameters),
     /Incomplete ingestion acknowledgement/,
   )
+})
+
+void test('Willie ne transmet que les jours terminés à Paris, à minuit et aux changements d’heure', async (t) => {
+  const previous = process.env.WILLIE_API_TOKEN
+  process.env.WILLIE_API_TOKEN = 'synthetic'
+  t.after(() => {
+    if (previous === undefined) delete process.env.WILLIE_API_TOKEN
+    else process.env.WILLIE_API_TOKEN = previous
+  })
+  let instant = ''
+  let days: string[] = []
+  t.mock.method(globalThis, 'fetch', (input: unknown) => {
+    assert.equal(
+      new URL(String(input)).searchParams.get('endDate'),
+      new Date(instant).toISOString(),
+    )
+    return Promise.resolve(
+      Response.json({
+        stations: [
+          {
+            stationID: 'synthetic-station',
+            datapoints: days.map((dateTime, index) => ({
+              dateTime,
+              consumption: index === 0 ? 0 : 95,
+            })),
+          },
+        ],
+        count: days.length,
+        unknownStationIds: [],
+      }),
+    )
+  })
+  for (const example of [
+    {
+      instant: '2026-01-02T22:59:59.999Z',
+      days: ['2026-01-01', '2026-01-02', '2026-01-03'],
+      accepted: 1,
+    },
+    {
+      instant: '2026-01-02T23:00:00.000Z',
+      days: ['2026-01-01', '2026-01-02', '2026-01-03'],
+      accepted: 2,
+    },
+    {
+      instant: '2026-03-29T21:59:59.999Z',
+      days: ['2026-03-28', '2026-03-29', '2026-03-30'],
+      accepted: 1,
+    },
+    {
+      instant: '2026-03-29T22:00:00.000Z',
+      days: ['2026-03-28', '2026-03-29', '2026-03-30'],
+      accepted: 2,
+    },
+    {
+      instant: '2026-10-25T22:59:59.999Z',
+      days: ['2026-10-24', '2026-10-25', '2026-10-26'],
+      accepted: 1,
+    },
+    {
+      instant: '2026-10-25T23:00:00.000Z',
+      days: ['2026-10-24', '2026-10-25', '2026-10-26'],
+      accepted: 2,
+    },
+  ]) {
+    instant = example.instant
+    days = example.days
+    const result = await new WillieConnector({
+      now: () => new Date(instant),
+    }).run({
+      serviceAccount: 'synthetic',
+      sourcePointId: 'synthetic-station',
+      rate: 100,
+      mostRecentAvailableDate: undefined,
+    })
+    const values = result.data.metrics[0].values
+    assert.deepEqual(
+      values.map((value) => value.periodStart?.toISOString()),
+      days.slice(0, example.accepted).map((day) => `${day}T00:00:00.000Z`),
+      instant,
+    )
+    assert.equal(values[0].value, 0)
+    for (const value of values)
+      assert.equal(
+        (value.periodEnd!.getTime() - value.periodStart!.getTime()) / 3_600_000,
+        24,
+      )
+  }
+})
+
+void test('une réponse Willie traversant minuit garde la borne de départ du HTTP', async (t) => {
+  const previous = process.env.WILLIE_API_TOKEN
+  process.env.WILLIE_API_TOKEN = 'synthetic'
+  t.after(() => {
+    if (previous === undefined) delete process.env.WILLIE_API_TOKEN
+    else process.env.WILLIE_API_TOKEN = previous
+  })
+  let now = new Date('2026-07-01T21:59:59Z')
+  let calls = 0
+  t.mock.method(globalThis, 'fetch', () => {
+    calls++
+    now = new Date('2026-07-01T22:01:00Z')
+    return Promise.resolve(
+      Response.json({
+        stations: [
+          {
+            stationID: 'synthetic-station',
+            datapoints: [
+              {dateTime: '2026-06-30', consumption: 0},
+              {dateTime: '2026-07-01', consumption: calls === 1 ? 95 : 943},
+              {dateTime: '2026-07-02', consumption: 12},
+            ],
+          },
+        ],
+        count: 3,
+        unknownStationIds: [],
+      }),
+    )
+  })
+  const connector = new WillieConnector({now: () => new Date(now)})
+  const context = {
+    serviceAccount: 'synthetic',
+    sourcePointId: 'synthetic-station',
+    rate: 100,
+    mostRecentAvailableDate: undefined,
+  }
+  const before = await connector.run(context)
+  assert.deepEqual(
+    before.data.metrics[0].values.map((value) => value.value),
+    [0],
+  )
+  const after = await connector.run(context)
+  assert.deepEqual(
+    after.data.metrics[0].values.map((value) => value.value),
+    [0, 943],
+  )
+})
+
+void test('un ancien curseur anticipé relit le dernier jour clos et ne perd pas le lendemain', async (t) => {
+  const previous = process.env.WILLIE_API_TOKEN
+  process.env.WILLIE_API_TOKEN = 'synthetic'
+  t.after(() => {
+    if (previous === undefined) delete process.env.WILLIE_API_TOKEN
+    else process.env.WILLIE_API_TOKEN = previous
+  })
+  let now = new Date('2026-10-12T03:00:00Z')
+  let start = '2026-10-11'
+  t.mock.method(globalThis, 'fetch', (input: unknown) => {
+    const url = new URL(String(input))
+    assert.equal(url.searchParams.get('startDate'), `${start}T00:00:00.000Z`)
+    assert.ok(
+      Date.parse(url.searchParams.get('startDate')!) <
+        Date.parse(url.searchParams.get('endDate')!),
+    )
+    return Promise.resolve(
+      Response.json({
+        stations: [
+          {
+            stationID: 'synthetic-station',
+            datapoints: [
+              {dateTime: start, consumption: 943},
+              {dateTime: now.toISOString().slice(0, 10), consumption: 95},
+              {dateTime: '2026-10-14', consumption: 0},
+            ],
+          },
+        ],
+        count: 3,
+        unknownStationIds: [],
+      }),
+    )
+  })
+  const connector = new WillieConnector({now: () => new Date(now)})
+  const context = {
+    serviceAccount: 'synthetic',
+    sourcePointId: 'synthetic-station',
+    rate: 100,
+    mostRecentAvailableDate: new Date('2026-10-13T00:00:00Z'),
+  }
+  const before = await connector.run(context)
+  assert.equal(
+    before.data.metrics[0].values[0].periodStart?.toISOString(),
+    '2026-10-11T00:00:00.000Z',
+  )
+  assert.equal(before.data.metrics[0].values.length, 1)
+  now = new Date('2026-10-13T03:00:00Z')
+  start = '2026-10-12'
+  const after = await connector.run(context)
+  assert.equal(
+    after.data.metrics[0].values[0].periodStart?.toISOString(),
+    '2026-10-12T00:00:00.000Z',
+  )
+  assert.equal(after.data.metrics[0].values.length, 1)
+  assert.equal(
+    after.data.metrics[0].conflictPolicy,
+    ConflictPolicy.SKIP_CONFLICTING_VALUES,
+  )
+})
+
+void test('Willie ne recule pas son activation si aucun jour activé n’est encore terminé', async (t) => {
+  const previous = process.env.WILLIE_API_TOKEN
+  process.env.WILLIE_API_TOKEN = 'synthetic'
+  t.after(() => {
+    if (previous === undefined) delete process.env.WILLIE_API_TOKEN
+    else process.env.WILLIE_API_TOKEN = previous
+  })
+  t.mock.method(globalThis, 'fetch', () => {
+    throw new Error('NO_PROVIDER_REQUEST_EXPECTED')
+  })
+  const result = await new WillieConnector({
+    now: () => new Date('2026-01-01T12:00:00Z'),
+  }).run({
+    serviceAccount: 'synthetic',
+    sourcePointId: 'synthetic-station',
+    rate: 100,
+    mostRecentAvailableDate: undefined,
+  })
+  assert.deepEqual(result.data.metrics[0].values, [])
 })
