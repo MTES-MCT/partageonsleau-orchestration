@@ -37,6 +37,7 @@ export async function processPoint(parameters: {
   } = point
 
   const connector = connectorRegistry.get(connectorName)
+  const requiresAcknowledgement = ['eveler', 'willie'].includes(connectorName)
 
   if (connectorName === 'eveler' && !EvelerClient.isConfigured()) {
     console.log(
@@ -67,10 +68,10 @@ export async function processPoint(parameters: {
     })
 
     if (
-      connectorName === 'eveler' &&
+      requiresAcknowledgement &&
       output.data.metrics.every((metric) => metric.values.length === 0)
     ) {
-      console.log('[PullUpdatedData] Eveler: no complete hours to ingest.')
+      console.log(`[PullUpdatedData] ${connectorName}: no values to ingest.`)
       return
     }
 
@@ -80,17 +81,17 @@ export async function processPoint(parameters: {
       declarantId,
       contextId,
       serviceAccountToken,
-      ...(connectorName === 'eveler' && {requireAcknowledgement: true}),
+      ...(requiresAcknowledgement && {requireAcknowledgement: true}),
     })
 
-    if (connectorName === 'eveler') {
+    if (requiresAcknowledgement) {
       if (!acknowledgement) {
         throw new Error(
-          '[PullUpdatedData] Missing Eveler ingestion acknowledgement.',
+          `[PullUpdatedData] Missing ${connectorName} ingestion acknowledgement.`,
         )
       }
       console.log(
-        `[PullUpdatedData] Eveler acknowledged: imported=${acknowledgement.imported}, skippedValues=${acknowledgement.skippedValues}`,
+        `[PullUpdatedData] ${connectorName} acknowledged: imported=${acknowledgement.imported}, skippedValues=${acknowledgement.skippedValues}`,
       )
       return
     }
@@ -99,7 +100,7 @@ export async function processPoint(parameters: {
       `[PullUpdatedData] Données ingérées pour le point source : ${sourcePointId}`,
     )
   } catch (error) {
-    if (connectorName === 'eveler') {
+    if (requiresAcknowledgement) {
       throw error
     }
     console.error(
@@ -127,7 +128,7 @@ export async function pullUpdatedData(
     `[PullUpdatedData] Nombre de comptes service trouvés : ${availableServiceAccounts.length}`,
   )
 
-  let evelerFailures = 0
+  let connectorFailures = 0
   for (const serviceAccount of availableServiceAccounts) {
     console.log(`[PullUpdatedData] Auth service account : ${serviceAccount}`)
 
@@ -183,17 +184,17 @@ export async function pullUpdatedData(
               point,
             })
           } catch (error) {
-            if (point.connector !== 'eveler') throw error
-            evelerFailures++
-            console.error('[PullUpdatedData] Eveler failed:', error)
+            if (!['eveler', 'willie'].includes(point.connector)) throw error
+            connectorFailures++
+            console.error(`[PullUpdatedData] ${point.connector} failed:`, error)
           }
         }
       }
     }
   }
-  if (evelerFailures > 0) {
+  if (connectorFailures > 0) {
     throw new Error(
-      `[PullUpdatedData] ${evelerFailures} Eveler connector(s) failed.`,
+      `[PullUpdatedData] ${connectorFailures} connector(s) failed.`,
     )
   }
 }

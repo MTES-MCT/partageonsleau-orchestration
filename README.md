@@ -151,6 +151,53 @@ ont un timeout et refusent les redirections ; les erreurs n'exposent ni clé ni
 corps des réponses. Le nouveau chemin ne passe pas par le connecteur générique
 par PP et n'applique pas `connector.rate`.
 
+### Rejeu Willie depuis un cache contrôlé
+
+Le pull Willie reprend chaque module à son propre curseur. Les consommations
+nulles restent absentes ; zéro reste une valeur valide. Les journées fournisseur
+(`dateTime: YYYY-MM-DD`) sont transportées avec des périodes explicites UTC
+`[J 00:00, J+1 00:00)`, conformément à l'historique. Le taux enregistré est
+transmis à l'API, qui applique la répartition. `SKIP_CONFLICTING_VALUES` complète
+les périodes manquantes et conserve les valeurs existantes, même si le fournisseur
+les a corrigées. Un accusé absent ou incohérent fait échouer le pull.
+
+Le rejeu manuel cible un seul connecteur et son déclarant, sans démarrer de
+worker ni appeler Willie. Préparer préalablement un cache privé hors Git :
+`STATION_UUID.response.json` contient la réponse fournisseur brute et
+`STATION_UUID.metadata.json` sa provenance, sa fenêtre et son SHA-256. Le contrat
+de validation est défini dans [`src/jobs/replay-willie.ts`](src/jobs/replay-willie.ts).
+La fenêtre comporte au plus 366 jours calendaires complets ; la fin est exclue.
+Les bornes de collecte fournisseur peuvent être en Europe/Paris : elles ne
+modifient pas la convention UTC des périodes conservées dans l'API.
+
+La préparation lit le contexte autorisé dans PLE et produit un plan sans ingérer :
+
+```bash
+node --import tsx scripts/replay-willie.ts --target testing \
+  --env-file /private/testing.env --connector CONNECTOR_UUID \
+  --declarant DECLARANT_UUID --start 2026-01-01 --end 2026-02-01 \
+  --cache-dir /private/willie-cache --report /private/willie-plan.json
+```
+
+Vérifier les identités, le taux, les jours proposés et les chevauchements avant
+d'appliquer le plan approuvé avec son empreinte exacte :
+
+```bash
+node --import tsx scripts/replay-willie.ts --apply --target testing \
+  --env-file /private/testing.env --against-plan /private/willie-plan.json \
+  --plan-hash APPROVED_SHA256 --cache-dir /private/willie-cache \
+  --report /private/willie-receipt.json
+```
+
+L'application relit le contexte et les fichiers, puis refuse toute dérive de
+cible, compte de service, affectation, taux, fenêtre ou payload. Les rapports
+sont créés en 0600 hors Git, sans écraser un rapport existant. Le reçu est
+enregistré `PREPARED` avant l'ingestion puis `ACKNOWLEDGED` après validation de
+l'accusé. Un reçu resté `PREPARED` exige une vérification côté API avant de
+conclure sur le résultat. Les jours ignorés ne sont pas une preuve d'égalité
+avec les anciennes valeurs : contrôler les différences séparément. Un rejeu
+avec le même plan conserve les périodes déjà présentes.
+
 ### Eveler
 
 Le connecteur `eveler` passe par le pull quotidien existant et le transport

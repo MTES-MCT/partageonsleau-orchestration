@@ -159,3 +159,48 @@ void test('le contexte classique et le transport conservent deux exploitations a
     assert.equal(payload.data.metrics[0].values[0].value, 12)
   }
 })
+
+void test('chaque module reprend son historique et un module vide ne reprend pas la date de son voisin', async (t) => {
+  const previous = {...process.env}
+  Object.assign(process.env, {
+    PLE_BASE_URL: 'https://api.invalid',
+    CLIENT_ID: 'synthetic',
+    CLIENT_SECRET: 'synthetic',
+  })
+  t.after(() => {
+    process.env = previous
+  })
+  t.mock.method(globalThis, 'fetch', () =>
+    Promise.resolve(
+      Response.json({
+        success: true,
+        exploitations: [
+          {
+            id: 'exploitation-1',
+            point: {id: 'point-1'},
+            mostRecentAvailableDate: '2026-10-01T00:00:00Z',
+            connectors: [
+              {
+                id: 'recent',
+                type: 'willie',
+                mostRecentAvailableDate: '2026-09-15T00:00:00Z',
+              },
+              {id: 'empty', type: 'willie', mostRecentAvailableDate: null},
+              {id: 'legacy', type: 'synthetic'},
+            ],
+          },
+        ],
+      }),
+    ),
+  )
+  const contexts = await new PartageonsLeauClient().getContextsForDeclarant(
+    'declarant-1',
+    'synthetic-token',
+  )
+  assert.deepEqual(
+    contexts[0].points.map((point) =>
+      point.mostRecentAvailableDate?.toISOString(),
+    ),
+    ['2026-09-15T00:00:00.000Z', undefined, '2026-10-01T00:00:00.000Z'],
+  )
+})

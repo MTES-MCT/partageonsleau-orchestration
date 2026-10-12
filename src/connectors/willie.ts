@@ -130,7 +130,7 @@ export class WillieConnector extends BaseConnector<
   private static readonly metric = {
     type: MetricType.VOLUME,
     granularity: Granularity.DAY,
-    conflictPolicy: ConflictPolicy.SKIP_NEW_CHUNK,
+    conflictPolicy: ConflictPolicy.SKIP_CONFLICTING_VALUES,
     unit: MetricUnit.M3,
   } as const
 
@@ -242,11 +242,9 @@ export class WillieConnector extends BaseConnector<
   ): Promise<ParsedPointPayload> {
     const station = assertAndGetStationForPoint(parsedData, context)
     const {datapoints} = station
-
-    const {minDate, maxDate} = this.getMinMaxDates(
-      datapoints,
-      (datapoint) => datapoint.dateTime,
-    )
+    const values = this.mapWillieDatapointsToMetricValues(datapoints)
+    const {minDate} = this.getMinMaxDates(values, (value) => value.periodStart)
+    const {maxDate} = this.getMinMaxDates(values, (value) => value.periodEnd)
 
     return {
       id_point_de_prelevement: context.sourcePointId,
@@ -266,7 +264,7 @@ export class WillieConnector extends BaseConnector<
           type: WillieConnector.metric.type,
           granularity: WillieConnector.metric.granularity,
           conflictPolicy: WillieConnector.metric.conflictPolicy,
-          values: this.mapWillieDatapointsToMetricValues(datapoints),
+          values,
           unit: WillieConnector.metric.unit,
         },
       ],
@@ -278,10 +276,22 @@ export class WillieConnector extends BaseConnector<
    */
   private mapWillieDatapointsToMetricValues(
     datapoints: WillieDatapoint[],
-  ): TimeserieValue[] {
-    return datapoints.map((datapoint) => ({
-      date: datapoint.dateTime,
-      value: datapoint.consumption,
-    }))
+  ): Array<TimeserieValue & {periodStart: Date; periodEnd: Date}> {
+    return datapoints.map((datapoint) => {
+      // Willie labels civil days as YYYY-MM-DD. Preserve the historical API
+      // representation [UTC midnight, next UTC midnight), including DST days.
+      // Explicit periods also make the ingestion acknowledgement use the same
+      // bounds as the API instead of treating the last day's start as its end.
+      const periodStart = new Date(datapoint.dateTime)
+      periodStart.setUTCHours(0, 0, 0, 0)
+      const periodEnd = new Date(periodStart)
+      periodEnd.setUTCDate(periodEnd.getUTCDate() + 1)
+      return {
+        date: periodStart,
+        periodStart,
+        periodEnd,
+        value: datapoint.consumption,
+      }
+    })
   }
 }

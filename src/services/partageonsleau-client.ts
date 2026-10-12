@@ -99,6 +99,7 @@ type DeclarantContextApiResponse = {
           id?: string | undefined
           type?: string | undefined
           rate?: number | undefined
+          mostRecentAvailableDate?: string | null
           parameters?: Record<string, unknown> | undefined
         }>
       | undefined
@@ -107,6 +108,7 @@ type DeclarantContextApiResponse = {
           id?: string | undefined
           type?: string | undefined
           rate?: number | undefined
+          mostRecentAvailableDate?: string | null
           parameters?: Record<string, unknown> | undefined
         }
       | undefined
@@ -197,6 +199,9 @@ function isDeclarantContextApiResponse(
         (value.rate === undefined ||
           value.rate === null ||
           typeof value.rate === 'number') &&
+        (value.mostRecentAvailableDate === undefined ||
+          value.mostRecentAvailableDate === null ||
+          typeof value.mostRecentAvailableDate === 'string') &&
         (value.parameters === undefined ||
           value.parameters === null ||
           isRecord(value.parameters)))
@@ -745,7 +750,9 @@ export class PartageonsLeauClient {
               typeof connector.id === 'string' ? connector.id : undefined,
             connectorRate: normalizeRate(connector.rate),
             mostRecentAvailableDate: toOptionalDate(
-              exploitation.mostRecentAvailableDate ?? undefined,
+              connector.mostRecentAvailableDate !== undefined
+                ? (connector.mostRecentAvailableDate ?? undefined)
+                : (exploitation.mostRecentAvailableDate ?? undefined),
             ),
             sourceFile: typeof sourceFile === 'string' ? sourceFile : undefined,
             connectorParameters,
