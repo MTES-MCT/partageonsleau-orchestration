@@ -7,6 +7,8 @@ export const RIVES_ET_EAUX_TIMEZONE = 'Europe/Paris'
 const admittedQualities = new Set(['A', 'B', 'C', 'D', 'E', 'X'])
 const excludedQualities = new Set(['Y', 'W', 'Z'])
 const dayMilliseconds = 86_400_000
+const maturityDelayDays = 15
+const rereadDays = 15
 const localFormatter = new Intl.DateTimeFormat('en-CA', {
   timeZone: RIVES_ET_EAUX_TIMEZONE,
   year: 'numeric',
@@ -87,12 +89,15 @@ export function parseRivesLocalDate(value: unknown): RivesTemporalResult {
 
 export function rivesDayWindows(now = new Date()): RivesDayWindow[] {
   const today = formatLocal(now).slice(0, 10)
-  const end = new Date(`${today}T00:00:00.000Z`).getTime()
-  return Array.from({length: 15}, (_, index) => {
-    const localStart = new Date(end - (15 - index) * dayMilliseconds)
+  // Shift calendar dates before converting Paris midnights to UTC, including DST.
+  const end =
+    new Date(`${today}T00:00:00.000Z`).getTime() -
+    maturityDelayDays * dayMilliseconds
+  return Array.from({length: rereadDays}, (_, index) => {
+    const localStart = new Date(end - (rereadDays - index) * dayMilliseconds)
       .toISOString()
       .slice(0, 10)
-    const localEnd = new Date(end - (14 - index) * dayMilliseconds)
+    const localEnd = new Date(end - (rereadDays - 1 - index) * dayMilliseconds)
       .toISOString()
       .slice(0, 10)
     return {

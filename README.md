@@ -121,9 +121,19 @@ identifiants PLE habituels. `RIVES_ET_EAUX_BASE_URL` vaut par défaut
 `https://services.riveseteaux.fr` ; `RIVES_ET_EAUX_TIMEZONE` doit être `Europe/Paris`.
 La clé fournisseur ne doit figurer ni dans les paramètres des exploitations ni dans Git.
 
-Chaque jour à **03:30 Europe/Paris**, le job relit les **15 jours locaux révolus**,
-un appel `/api/public/Calypso/Export` par journée pour tous les compteurs.
+Chaque jour à **03:30 Europe/Paris**, le job attend **15 jours calendaires** après
+la date du relevé et relit les **15 journées précédant cette borne**, soit
+**[J−30, J−15[** avec des bornes à minuit en Europe/Paris. Par exemple, le
+13 octobre 2026, il interroge du 13 septembre inclus au 28 septembre exclu.
+La date de référence est fixée au démarrage du job, avec un appel
+`/api/public/Calypso/Export` par journée pour tous les compteurs.
+Ce délai repose sur le champ fournisseur `Date` (date du relevé) : aucune date
+de publication ou de dernière correction distincte n'est disponible.
 `dateDebut` et `dateFin` portent les dates locales des deux minuits consécutifs.
+Les relevés datés à J−15 ou après sont écartés avant ingestion, y compris si le
+fournisseur les renvoie à une borne inclusive. Les données déjà importées sont
+conservées. La relecture permet de récupérer les corrections des relevés anciens ;
+une interruption de plus de 15 jours nécessite un rattrapage ciblé.
 Les doublons identiques aux bornes inclusives sont éliminés ; les observations
 contradictoires et lignes malformées sont conservées. Le connecteur traduit seul
 le format Calypso vers des relevés génériques : `externalId`, `observedAt`, `index`

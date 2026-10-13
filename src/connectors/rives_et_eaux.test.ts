@@ -34,8 +34,8 @@ void test('Rives preserves original local time and exact seconds in Europe/Paris
   })
 })
 
-void test('Rives daily windows use completed local days and follow DST changes', () => {
-  const windows = rivesDayWindows(new Date('2026-03-30T02:00:00Z'))
+void test('Rives rereads 15 local days ending 15 days ago across spring and autumn DST', () => {
+  const windows = rivesDayWindows(new Date('2026-04-14T02:00:00Z'))
   assert.equal(windows.length, 15)
   assert.equal(windows[0].localStart, '2026-03-15')
   assert.deepEqual(windows.at(-1), {
@@ -45,13 +45,60 @@ void test('Rives daily windows use completed local days and follow DST changes',
     windowEnd: '2026-03-29T22:00:00.000Z',
   })
   assert.equal(
-    rivesDayWindows(new Date('2026-10-26T04:00:00Z')).at(-1)?.windowStart,
-    '2026-10-24T22:00:00.000Z',
+    Date.parse(windows.at(-1)!.windowEnd) -
+      Date.parse(windows.at(-1)!.windowStart),
+    23 * 3_600_000,
   )
+  const autumn = rivesDayWindows(new Date('2026-11-10T04:00:00Z'))
+  assert.equal(autumn.length, 15)
+  assert.equal(autumn[0].localStart, '2026-10-11')
+  assert.deepEqual(autumn.at(-1), {
+    localStart: '2026-10-25',
+    localEnd: '2026-10-26',
+    windowStart: '2026-10-24T22:00:00.000Z',
+    windowEnd: '2026-10-25T23:00:00.000Z',
+  })
   assert.equal(
-    rivesDayWindows(new Date('2026-09-16T22:30:00Z')).at(-1)?.localEnd,
-    '2026-09-17',
+    Date.parse(autumn.at(-1)!.windowEnd) -
+      Date.parse(autumn.at(-1)!.windowStart),
+    25 * 3_600_000,
   )
+})
+
+void test('successive Rives runs overlap 14 mature days and advance without gaps', () => {
+  const first = rivesDayWindows(new Date('2026-09-17T10:00:00Z'))
+  const next = rivesDayWindows(new Date('2026-09-18T10:00:00Z'))
+  assert.equal(first[0].localStart, '2026-08-18')
+  assert.equal(first.at(-1)?.localEnd, '2026-09-02')
+  assert.equal(next.at(-1)?.localEnd, '2026-09-03')
+  assert.deepEqual(first.slice(1), next.slice(0, -1))
+  for (const windows of [first, next]) {
+    assert.equal(windows.length, 15)
+    for (let index = 1; index < windows.length; index++) {
+      assert.equal(windows[index - 1].windowEnd, windows[index].windowStart)
+    }
+  }
+  assert.equal(first.at(-1)?.windowEnd, next.at(-1)?.windowStart)
+})
+
+void test('the delayed Rives cutoff changes at Paris midnight in summer and winter', () => {
+  for (const [before, after, oldEnd, newEnd] of [
+    [
+      '2026-09-16T21:59:59.999Z',
+      '2026-09-16T22:00:00.000Z',
+      '2026-09-01',
+      '2026-09-02',
+    ],
+    [
+      '2026-12-20T22:59:59.999Z',
+      '2026-12-20T23:00:00.000Z',
+      '2026-12-05',
+      '2026-12-06',
+    ],
+  ]) {
+    assert.equal(rivesDayWindows(new Date(before)).at(-1)?.localEnd, oldEnd)
+    assert.equal(rivesDayWindows(new Date(after)).at(-1)?.localEnd, newEnd)
+  }
 })
 
 void test('Rives deduplicates strict repeats across inclusive windows, preserves conflicts and invalid qualities', () => {
@@ -230,7 +277,7 @@ void test('Rives fetches all meters once per local window with native fetch and 
   assert.equal(calls.length, 1)
   assert.equal(
     calls[0].url,
-    'https://provider.invalid/api/public/Calypso/Export?dateDebut=2026-09-02&dateFin=2026-09-03',
+    'https://provider.invalid/api/public/Calypso/Export?dateDebut=2026-08-18&dateFin=2026-08-19',
   )
   assert.deepEqual(calls[0].options?.headers, {
     Accept: 'application/json',
