@@ -45,6 +45,9 @@ export async function pullRivesEtEaux(
     )
   }
 
+  // Freeze the cutoff before authentication or provider calls can cross midnight.
+  const windows = rivesDayWindows(options.now ?? new Date())
+  const cutoff = Date.parse(windows.at(-1)!.windowEnd)
   const client =
     options.client ??
     new MeterReadingsClient(
@@ -68,10 +71,19 @@ export async function pullRivesEtEaux(
       process.env.RIVES_ET_EAUX_BASE_URL,
     )
   const seen = new Set<string>()
-  for (const window of rivesDayWindows(options.now)) {
+  console.log(
+    `[rives-et-eaux] Collecting mature readings from ${windows[0].localStart} to ${windows.at(-1)!.localEnd} exclusive (Europe/Paris).`,
+  )
+  for (const window of windows) {
     const rawRows = await connector.fetchWindow(window)
     const fetchedAt = new Date().toISOString()
-    const readings = normalizeRivesRows(rawRows, seen)
+    const normalized = normalizeRivesRows(rawRows, seen)
+    // Provider bounds may be inclusive. Keep undated anomalies for diagnostics;
+    // they cannot produce an index or a volume in the API.
+    const readings = normalized.filter(
+      (reading) =>
+        reading.observedAt === null || Date.parse(reading.observedAt) < cutoff,
+    )
     const batch: MeterIngestionBatch = {
       provider: RIVES_ET_EAUX_PROVIDER,
       scope: RIVES_ET_EAUX_SCOPE,
@@ -85,7 +97,7 @@ export async function pullRivesEtEaux(
     }
     const result = await client.ingest(batch)
     console.log(
-      `[rives-et-eaux] Durable window ${window.localStart}: ${JSON.stringify(result.counts)}.`,
+      `[rives-et-eaux] Durable window ${window.localStart}: ${JSON.stringify(result.counts)}; deferred recent readings: ${normalized.length - readings.length}.`,
     )
   }
 }

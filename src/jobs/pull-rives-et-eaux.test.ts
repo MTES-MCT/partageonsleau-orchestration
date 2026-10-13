@@ -104,7 +104,7 @@ void test('daily batch job fetches 15 windows once regardless of meter count and
         return [
           {
             NumeroSerieCompteur: 'meter1',
-            Date: '2026-09-03T00:00:00',
+            Date: '2026-08-19T00:00:00',
             Index: 10,
             CodeValidite: 'Y',
           },
@@ -129,7 +129,183 @@ void test('daily batch job fetches 15 windows once regardless of meter count and
   assert.equal(batches[0].readings[0].reason, 'EXCLUDED_QUALITY')
   assert.equal(batches[0].readings[0].index, '10')
   assert.equal(batches[0].complete, true)
-  assert.equal(batches[0].windowStart, '2026-09-01T22:00:00.000Z')
+  assert.equal(batches[0].windowStart, '2026-08-17T22:00:00.000Z')
+  assert.equal(batches.at(-1)?.windowEnd, '2026-09-01T22:00:00.000Z')
+})
+
+void test('Rives excludes the exact maturity cutoff and newer observations, preserving zero, quality and invalid dates', async () => {
+  const batches: MeterIngestionBatch[] = []
+  const mature = {
+    NumeroSerieCompteur: 'meter1',
+    Date: '2026-09-01T23:59:59.999',
+    Index: 0,
+    CodeValidite: 'B',
+  }
+  const invalidDate = {...mature, Date: 'not-a-date'}
+  await pullRivesEtEaux({
+    enabled: true,
+    now,
+    client: {
+      async getContext() {
+        return context
+      },
+      async ingest(batch) {
+        batches.push(batch)
+        return acknowledgment(batch)
+      },
+    },
+    connector: {
+      async fetchWindow(window) {
+        return window.localStart === '2026-09-01'
+          ? [
+              mature,
+              {...mature, CodeValidite: 'Y'},
+              {...mature, Date: '2026-09-02T00:00:00'},
+              {...mature, Date: '2026-09-02T00:00:00.001'},
+              {...mature, Date: '2026-09-16T12:00:00'},
+              {...mature, Date: '2026-09-16T12:00:00', CodeValidite: 'Y'},
+              invalidDate,
+            ]
+          : []
+      },
+    },
+  })
+  const readings = batches.flatMap((batch) => batch.readings)
+  assert.equal(readings.length, 3)
+  assert.equal(readings[0].observedAt, '2026-09-01T21:59:59.999Z')
+  assert.equal(readings[0].index, '0')
+  assert.equal(readings[0].quality, 'B')
+  assert.equal(readings[0].status, 'VALID')
+  assert.equal(readings[1].reason, 'EXCLUDED_QUALITY')
+  assert.equal(readings[1].index, '0')
+  assert.equal(readings[2].observedAt, null)
+  assert.equal(readings[2].status, 'INVALID')
+  assert.equal(readings[2].reason, 'INVALID_LOCAL_TIME')
+  assert.deepEqual(readings[2].raw, invalidDate)
+})
+
+void test('inclusive provider boundaries are deduplicated and the withheld boundary becomes eligible the next day', async () => {
+  async function runDay(at: Date) {
+    const batches: MeterIngestionBatch[] = []
+    await pullRivesEtEaux({
+      enabled: true,
+      now: at,
+      client: {
+        async getContext() {
+          return context
+        },
+        async ingest(batch) {
+          batches.push(batch)
+          return acknowledgment(batch)
+        },
+      },
+      connector: {
+        async fetchWindow(window) {
+          return [window.localStart, window.localEnd].map((day) => ({
+            NumeroSerieCompteur: 'meter1',
+            Date: `${day}T00:00:00`,
+            Index: 0,
+            CodeValidite: 'A',
+          }))
+        },
+      },
+    })
+    return batches.flatMap((batch) => batch.readings)
+  }
+  const first = await runDay(now)
+  const next = await runDay(new Date('2026-09-18T10:00:00Z'))
+  const firstTimes = first.map((reading) => reading.observedAt)
+  const nextTimes = next.map((reading) => reading.observedAt)
+  assert.equal(first.length, 15)
+  assert.equal(new Set(firstTimes).size, 15)
+  assert.equal(next.length, 15)
+  assert.equal(new Set(nextTimes).size, 15)
+  assert.deepEqual(firstTimes.slice(1), nextTimes.slice(0, -1))
+  assert.equal(firstTimes.includes('2026-09-01T22:00:00.000Z'), false)
+  assert.equal(nextTimes.at(-1), '2026-09-01T22:00:00.000Z')
+  assert.ok([...first, ...next].every((reading) => reading.index === '0'))
+})
+
+void test('the Rives maturity cutoff is fixed before authentication and survives a job crossing Paris midnight', async (t) => {
+  t.mock.timers.enable({
+    apis: ['Date'],
+    now: new Date('2026-09-16T21:59:59.999Z'),
+  })
+  const batches: MeterIngestionBatch[] = []
+  await pullRivesEtEaux({
+    enabled: true,
+    client: {
+      async getContext() {
+        t.mock.timers.setTime(new Date('2026-09-16T22:00:00.000Z').getTime())
+        return context
+      },
+      async ingest(batch) {
+        batches.push(batch)
+        return acknowledgment(batch)
+      },
+    },
+    connector: {
+      async fetchWindow(window) {
+        t.mock.timers.setTime(new Date('2026-09-17T22:00:00.000Z').getTime())
+        return window.localStart === '2026-08-31'
+          ? ['2026-08-31T23:59:59.999', '2026-09-01T00:00:00'].map(
+              (observedDate) => ({
+                NumeroSerieCompteur: 'meter1',
+                Date: observedDate,
+                Index: 1,
+                CodeValidite: 'A',
+              }),
+            )
+          : []
+      },
+    },
+  })
+  assert.equal(batches.length, 15)
+  assert.equal(batches[0].windowStart, '2026-08-16T22:00:00.000Z')
+  assert.equal(batches.at(-1)?.windowEnd, '2026-08-31T22:00:00.000Z')
+  assert.deepEqual(
+    batches.flatMap((batch) =>
+      batch.readings.map((reading) => reading.observedAt),
+    ),
+    ['2026-08-31T21:59:59.999Z'],
+  )
+})
+
+void test('a retry after a middle-window failure rereads mature windows without losing the previous successes', async () => {
+  const attempted: MeterIngestionBatch[] = []
+  let fail = true
+  const options = {
+    enabled: true,
+    now,
+    client: {
+      async getContext() {
+        return context
+      },
+      async ingest(batch: MeterIngestionBatch) {
+        attempted.push(batch)
+        if (fail && attempted.length === 4) {
+          throw new Error('Transient ingestion failure')
+        }
+        return acknowledgment(batch)
+      },
+    },
+    connector: {
+      async fetchWindow() {
+        return []
+      },
+    },
+  }
+  await assert.rejects(pullRivesEtEaux(options), /Transient ingestion failure/v)
+  assert.equal(attempted.length, 4)
+  fail = false
+  await pullRivesEtEaux(options)
+  const replay = attempted.slice(4)
+  assert.equal(replay.length, 15)
+  assert.deepEqual(
+    replay.slice(0, 4).map((batch) => [batch.windowStart, batch.windowEnd]),
+    attempted.slice(0, 4).map((batch) => [batch.windowStart, batch.windowEnd]),
+  )
+  assert.equal(replay.at(-1)?.windowEnd, '2026-09-01T22:00:00.000Z')
 })
 
 void test('provider and ingestion failures propagate, stop following windows and are retryable by BullMQ', async () => {
