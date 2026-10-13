@@ -145,6 +145,8 @@ export class MeterReadingsClient {
     const result = await this.request(
       '/service-accounts/meter-readings/ingestions',
       batch,
+      // API may spend 20s acquiring a transaction, then 120s executing it.
+      150_000,
     )
     if (
       !isMeterIngestionResult(result) ||
@@ -162,6 +164,7 @@ export class MeterReadingsClient {
   private async request(
     path: string,
     body?: Record<string, unknown>,
+    timeoutMilliseconds = 60_000,
   ): Promise<unknown> {
     let response: Response
     try {
@@ -175,7 +178,7 @@ export class MeterReadingsClient {
             ...(this.token ? {Authorization: `Bearer ${this.token}`} : {}),
           },
           ...(body ? {body: JSON.stringify(body)} : {}),
-          signal: AbortSignal.timeout(60_000),
+          signal: AbortSignal.timeout(timeoutMilliseconds),
           redirect: 'error',
         },
       )

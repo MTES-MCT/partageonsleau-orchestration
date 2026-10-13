@@ -158,8 +158,11 @@ ni son fuseau horaire. Les dates antérieures à l'activation sont conservées �
 Un échec fournisseur ou PLE fait échouer le job (trois tentatives BullMQ, délai
 exponentiel). Les requêtes natives `fetch` conservent la configuration du proxy,
 ont un timeout et refusent les redirections ; les erreurs n'exposent ni clé ni
-corps des réponses. Le nouveau chemin ne passe pas par le connecteur générique
-par PP et n'applique pas `connector.rate`.
+corps des réponses. L'ingestion PLE attend au maximum 150 secondes, pour couvrir
+les 20 secondes d'acquisition et les 120 secondes d'exécution de sa transaction
+avec une marge de transport. L'authentification et le contexte restent bornés à
+60 secondes, les appels au fournisseur à 30 secondes. Le nouveau chemin ne passe
+pas par le connecteur générique par PP et n'applique pas `connector.rate`.
 
 ### Rejeu Willie depuis un cache contrôlé
 
