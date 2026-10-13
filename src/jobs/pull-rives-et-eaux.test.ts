@@ -356,7 +356,12 @@ void test('provider and ingestion failures propagate, stop following windows and
   assert.equal(fetched, 1)
 })
 
-void test('PLE client requires durable acknowledgment including checkpoint and received count', async () => {
+void test('PLE client requires durable acknowledgment including checkpoint and received count', async (t) => {
+  const timeouts: number[] = []
+  t.mock.method(AbortSignal, 'timeout', (milliseconds: number) => {
+    timeouts.push(milliseconds)
+    return new AbortController().signal
+  })
   const batch: MeterIngestionBatch = {
     provider: 'rives-et-eaux',
     scope: 'epidropt',
@@ -402,6 +407,7 @@ void test('PLE client requires durable acknowledgment including checkpoint and r
     context,
   )
   assert.deepEqual(await client.ingest(batch), acknowledgment(batch))
+  assert.deepEqual(timeouts, [60_000, 60_000, 150_000])
   assert.equal(
     requests.at(-1)?.path,
     '/service-accounts/meter-readings/ingestions',
@@ -418,6 +424,69 @@ void test('PLE client requires durable acknowledgment including checkpoint and r
   ]) {
     await assert.rejects(client.ingest(batch), /durable complete ingestion/v)
   }
+  assert.deepEqual(timeouts.slice(2), Array<number>(5).fill(150_000))
+})
+
+void test('meter ingestion timeout is sanitized and stops the job without acknowledging or fetching another window', async (t) => {
+  const controller = new AbortController()
+  const timeoutError = new Error('test-secret test-token timeout detail')
+  const timeouts: number[] = []
+  t.mock.method(AbortSignal, 'timeout', (milliseconds: number) => {
+    timeouts.push(milliseconds)
+    return milliseconds === 150_000
+      ? controller.signal
+      : new AbortController().signal
+  })
+  let ingestions = 0
+  let fetched = 0
+  const client = new MeterReadingsClient(
+    'https://ple.invalid',
+    'sa_test',
+    'test-secret',
+    async (input, options) => {
+      const path = new URL(
+        input instanceof Request ? input.url : input.toString(),
+      ).pathname
+      if (path.endsWith('/token')) {
+        return Response.json({accessToken: 'test-token'})
+      }
+      if (path.endsWith('/meter-streams')) {
+        return Response.json(context)
+      }
+      ingestions++
+      assert.equal(options?.method, 'POST')
+      assert.equal(options.signal, controller.signal)
+      assert.equal(options.redirect, 'error')
+      return new Promise<Response>((_resolve, reject) => {
+        controller.signal.addEventListener(
+          'abort',
+          () => reject(timeoutError),
+          {once: true},
+        )
+        queueMicrotask(() => controller.abort(timeoutError))
+      })
+    },
+  )
+  await assert.rejects(
+    pullRivesEtEaux({
+      enabled: true,
+      now,
+      client,
+      connector: {
+        async fetchWindow() {
+          fetched++
+          return []
+        },
+      },
+    }),
+    {
+      message:
+        '[meter-readings] PLE request /service-accounts/meter-readings/ingestions failed or timed out.',
+    },
+  )
+  assert.deepEqual(timeouts, [60_000, 60_000, 150_000])
+  assert.equal(ingestions, 1)
+  assert.equal(fetched, 1)
 })
 
 void test('PLE configuration never falls back to mocks and failures remain sanitized', async () => {
