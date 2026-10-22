@@ -186,6 +186,16 @@ void test('chaque module reprend son historique et un module vide ne reprend pas
                 mostRecentAvailableDate: '2026-09-15T00:00:00Z',
               },
               {id: 'empty', type: 'willie', mostRecentAvailableDate: null},
+              {
+                id: 'orange-recent',
+                type: 'orange_live_objects',
+                mostRecentAvailableDate: '2026-09-12T08:15:00Z',
+              },
+              {
+                id: 'orange-empty',
+                type: 'orange_live_objects',
+                mostRecentAvailableDate: null,
+              },
               {id: 'legacy', type: 'synthetic'},
             ],
           },
@@ -201,6 +211,12 @@ void test('chaque module reprend son historique et un module vide ne reprend pas
     contexts[0].points.map((point) =>
       point.mostRecentAvailableDate?.toISOString(),
     ),
-    ['2026-09-15T00:00:00.000Z', undefined, '2026-10-01T00:00:00.000Z'],
+    [
+      '2026-09-15T00:00:00.000Z',
+      undefined,
+      '2026-09-12T08:15:00.000Z',
+      undefined,
+      '2026-10-01T00:00:00.000Z',
+    ],
   )
 })

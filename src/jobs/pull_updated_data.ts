@@ -37,7 +37,11 @@ export async function processPoint(parameters: {
   } = point
 
   const connector = connectorRegistry.get(connectorName)
-  const requiresAcknowledgement = ['eveler', 'willie'].includes(connectorName)
+  const requiresAcknowledgement = [
+    'eveler',
+    'willie',
+    'orange_live_objects',
+  ].includes(connectorName)
 
   if (connectorName === 'eveler' && !EvelerClient.isConfigured()) {
     console.log(
