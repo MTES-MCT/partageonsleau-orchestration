@@ -20,6 +20,8 @@ type OrangeLiveObjectsRecord = {
 
 type OrangeMetricValue = {
   date: Date
+  periodStart: Date
+  periodEnd: Date
   value: number
 }
 
@@ -254,10 +256,8 @@ export class OrangeLiveObjectsConnector extends BaseConnector<
     parsedData: OrangeSourceData,
     context: ConnectorRunContext,
   ): Promise<ParsedPointPayload> {
-    const {minDate, maxDate} = this.getMinMaxDates(
-      parsedData.values,
-      (value) => value.date,
-    )
+    const minDate = parsedData.values[0]?.periodStart
+    const maxDate = parsedData.values.at(-1)?.periodEnd
 
     return {
       id_point_de_prelevement: context.sourcePointId,
@@ -305,7 +305,18 @@ export class OrangeLiveObjectsConnector extends BaseConnector<
         )
       }
       // Retransmissions can have distinct Orange IDs with the same observation.
-      values.set(date.getTime(), {date, value: sensorValue})
+      // Preserve the observation timestamp while making the API's existing
+      // quarter-hour storage bounds explicit, including for acknowledgement.
+      const periodStart = new Date(
+        Math.floor(date.getTime() / 900_000) * 900_000,
+      )
+      const periodEnd = new Date(periodStart.getTime() + 900_000)
+      values.set(date.getTime(), {
+        date,
+        periodStart,
+        periodEnd,
+        value: sensorValue,
+      })
     }
     return [...values.values()].sort(
       (left, right) => left.date.getTime() - right.date.getTime(),

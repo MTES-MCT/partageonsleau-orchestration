@@ -3,6 +3,12 @@ import {EvelerClient} from '../connectors/eveler.js'
 import {type ServiceAccountPointContext} from '../connectors/types.js'
 import {PartageonsLeauClient} from '../services/partageonsleau-client.js'
 
+const acknowledgedConnectors = new Set([
+  'eveler',
+  'willie',
+  'orange_live_objects',
+])
+
 export async function processPoint(parameters: {
   connectorRegistry: Map<string, BaseConnector<unknown, unknown>>
   partageonsLeauClient: PartageonsLeauClient
@@ -37,11 +43,7 @@ export async function processPoint(parameters: {
   } = point
 
   const connector = connectorRegistry.get(connectorName)
-  const requiresAcknowledgement = [
-    'eveler',
-    'willie',
-    'orange_live_objects',
-  ].includes(connectorName)
+  const requiresAcknowledgement = acknowledgedConnectors.has(connectorName)
 
   if (connectorName === 'eveler' && !EvelerClient.isConfigured()) {
     console.log(
@@ -188,7 +190,7 @@ export async function pullUpdatedData(
               point,
             })
           } catch (error) {
-            if (!['eveler', 'willie'].includes(point.connector)) throw error
+            if (!acknowledgedConnectors.has(point.connector)) throw error
             connectorFailures++
             console.error(`[PullUpdatedData] ${point.connector} failed:`, error)
           }

@@ -72,7 +72,10 @@ void test('Orange paginates newest-first through an empty page and ingests the o
   assert.equal(output.data.metrics[0].values[0].value, 0)
   assert.equal(output.data.metrics[0].values[499].value, 499)
   assert.equal(output.data.min_date?.toISOString(), record(0).timestamp)
-  assert.equal(output.data.max_date?.toISOString(), record(499).timestamp)
+  assert.equal(
+    output.data.max_date?.toISOString(),
+    new Date(Date.parse(record(499).timestamp) + 900_000).toISOString(),
+  )
   assert.equal(output.data.source_metadata?.sensor_index, '1')
   assert.equal(output.data.metrics[0].type, MetricType.INDEX)
   assert.equal(output.data.metrics[0].unit, MetricUnit.M3)
@@ -100,7 +103,10 @@ void test('Orange never splits the final normalized quarter-hour when limiting a
   ).toISOString()
   const output = await fromPages([rows.reverse(), []]).run(context)
   assert.equal(output.data.metrics[0].values.length, 499)
-  assert.equal(output.data.max_date?.toISOString(), record(498).timestamp)
+  assert.equal(
+    output.data.max_date?.toISOString(),
+    new Date(Date.parse(record(498).timestamp) + 900_000).toISOString(),
+  )
   const crowded = Array.from({length: 501}, (_, index) => ({
     ...record(index),
     timestamp: new Date(start.getTime() + index * 1000).toISOString(),
@@ -127,6 +133,8 @@ void test('Orange deduplicates retransmissions and overlapping IDs without chang
     output.data.metrics[0].values,
     [0, 1, 2].map((index) => ({
       date: new Date(record(index).timestamp),
+      periodStart: new Date(record(index).timestamp),
+      periodEnd: new Date(Date.parse(record(index).timestamp) + 900_000),
       value: index,
     })),
   )
