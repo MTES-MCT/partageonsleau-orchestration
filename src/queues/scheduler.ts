@@ -1,7 +1,9 @@
+import {isSchedulerEnabled} from './execution-options.js'
 import {isRivesEtEauxEnabled} from '../jobs/pull-rives-et-eaux.js'
 import {JOBS, getQueue} from './config.js'
 
 export async function startScheduler() {
+  if (!isSchedulerEnabled()) return
   for (const job of JOBS) {
     if (!('cron' in job) || !job.cron) {
       continue

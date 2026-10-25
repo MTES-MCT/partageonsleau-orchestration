@@ -160,9 +160,12 @@ try {
 
   const workers = startWorkers()
 
-  const server = app.listen(port, () => {
-    console.log(`Server listening on port ${port}`)
-  })
+  const server = app.listen(
+    {port, host: process.env.BIND_HOST || undefined},
+    () => {
+      console.log(`Server listening on port ${port}`)
+    },
+  )
 
   let isShuttingDown = false
 

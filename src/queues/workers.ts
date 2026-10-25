@@ -1,3 +1,4 @@
+import {selectedWorkerNames} from './execution-options.js'
 import {Worker, type Job} from 'bullmq'
 import * as Sentry from '@sentry/node'
 import {connectorRegistry} from '../connectors/index.js'
@@ -37,7 +38,7 @@ const handlers: Record<string, (job: Job<unknown>) => Promise<void>> = {
 export function startWorkers() {
   const connection = getConnection()
 
-  return JOBS.map(({name}) => {
+  return selectedWorkerNames(JOBS.map((job) => job.name)).map((name) => {
     const handler = handlers[name]
 
     const worker = new Worker(name, handler, {

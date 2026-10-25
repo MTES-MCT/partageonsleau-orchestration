@@ -339,3 +339,67 @@ Paramètres typiques :
 - `resolution` = `day`
 
 La réponse `stations[].datapoints[]` est mappée vers le format commun.
+
+## Fichiers historiques de La Réunion
+
+Pour la recette locale, préparer les configurations et le compte de service
+avec `scripts/reunion/prepare-local.js` dans le dépôt API, puis lancer depuis
+la racine de cet orchestrateur :
+
+```sh
+reunion_runtime="$HOME/.local/share/preservonsleau/imports/reunion-local-20261025/runtime"
+npm run build
+BIND_HOST=127.0.0.1 SCHEDULER_ENABLED=false WORKER_JOBS=process-declaration \
+  node --env-file="$reunion_runtime/orchestration-local.env" dist/index.js
+```
+
+Le serveur écoute sur le port 5501 et appelle l'API locale sur le port 5500.
+Seuls les dépôts de déclaration sont traités ; les collectes planifiées sont
+désactivées. Le parcours existant de PE est conservé. L'API ouvre les deux formats
+aux 244 préleveurs avec `enable-local-formats.js`, indépendamment de la sélection
+des dossiers historiques acceptés. Cette recette ne signifie pas que l'ancienne
+instance est décommissionnée ni que les environnements distants sont déployés.
+
+Les connecteurs `reunion_camion_citerne` et `reunion_multi_param` lisent XLS,
+XLSX et ODS. Le premier accepte les types `camion-citerne` et
+`reunion-camion-citerne`, le second `aep-zre`, `icpe-hors-zre` et
+`reunion-multi-param`. Les noms du registre sont également acceptés.
+
+Leur sortie native est distincte des métriques numériques des autres
+connecteurs : `data.nativeTemporal=true`, `data.series[].nativeTemporal=true`,
+valeurs décimales en chaînes, quinze paramètres et unités natifs, remarques et
+cellules d'origine. Les dates locales sont interprétées dans `Indian/Reunion`
+puis transmises en UTC. Une observation instantanée a des bornes égales ; un
+volume conserve sa période, sans étalement en jours ni calcul d'index dérivé.
+Le format camion accepte aussi les périodes explicites `01/12/2025 au 19/12/2025` :
+un seul cumul, de minuit local le premier jour à minuit après le dernier jour,
+avec une fréquence `irregular`. Les zéros et le texte original sont conservés ;
+une date absente ou une période inversée reste une anomalie.
+Les erreurs localisées sont renvoyées avec les séries valides ; les doublons
+contradictoires sont écartés et signalés, jamais additionnés arbitrairement.
+L'API associe les points par `reunion:DEP-974:point:<code>` et applique
+les règles habituelles de publication. L'identifiant de série est stable pour
+une pièce, un onglet et une colonne.
+
+Le worker analyse un fichier à la fois et prépare les parties JSON dans son
+répertoire temporaire privé. Il vise 16 MiB par partie, en conservant chaque
+série entière ; une série plus volumineuse peut occuper une partie dédiée
+jusqu'à 48 MiB, enveloppe comprise. Au-delà, le traitement échoue explicitement
+avant tout envoi et les originaux restent conservés. Les erreurs sont gardées
+intégralement. Une fois le nombre de parties connu, elles sont envoyées dans
+l'ordre avec `data.batch={id,index,total}` (index à partir de zéro). Le hash
+inclut le contenu de toutes les parties et reste stable au rejeu. Fichiers et
+parties temporaires sont supprimés, y compris en cas d'échec.
+
+Pour analyser un fichier local sans réseau ni démarrage des workers :
+
+```sh
+node --import tsx scripts/parse-reunion.ts \
+  --file /chemin/prive/suivi.xlsx --type aep-zre --file-id piece-stable \
+  --output /chemin/prive/analyse.json
+```
+
+Le JSON de sortie est privé (mode `0600`) et ne doit pas être versionné.
+Après compilation, l'import historique peut appeler directement
+`parseReunionFile({buffer, filename, fileId, typeCode})` depuis
+`dist/src/connectors/reunion.js`. Le résultat contient `{series, errors}`.
