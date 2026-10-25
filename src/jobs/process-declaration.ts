@@ -1,8 +1,22 @@
+import {createHash} from 'node:crypto'
+import {
+  parseReunionFile,
+  reunionConnectorName,
+  REUNION_PARSER_VERSION,
+} from '../connectors/reunion.js'
+import type {NativeSeries} from '../connectors/reunion-types.js'
+import {
+  REUNION_BATCH_MAX_BYTES,
+  REUNION_BATCH_TRANSPORT_VERSION,
+  spoolNativeFileParts,
+  type NativeSpoolPart,
+  type NativeSpoolPayload,
+} from './reunion-batch-spool.js'
 import process from 'node:process'
 import path from 'node:path'
 import {tmpdir} from 'node:os'
 import {Buffer} from 'node:buffer'
-import {mkdtemp, rm, writeFile} from 'node:fs/promises'
+import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises'
 import {connectorRegistry} from '../connectors/index.js'
 import {parseAquasysSourcePointId} from '../connectors/aquasys.js'
 import {
@@ -19,6 +33,8 @@ import {
 
 type DeclarationFile = {
   id: string
+  sourceFileId?: string
+  checksum?: string
   type: string
   filename: string
   url: string
@@ -80,7 +96,9 @@ type LegacySeries = {
 
 type LegacyIngestionPayload = {
   conflictPolicy: ConflictPolicy
-  series: LegacySeries[]
+  nativeTemporal?: boolean
+  batch?: {id: string; index: number; total: number}
+  series: Array<LegacySeries | NativeSeries>
 }
 
 type IngestionResult = {
@@ -99,6 +117,9 @@ function isDeclarationFile(value: unknown): value is DeclarationFile {
 
   return (
     typeof value.id === 'string' &&
+    (value.sourceFileId === undefined ||
+      typeof value.sourceFileId === 'string') &&
+    (value.checksum === undefined || typeof value.checksum === 'string') &&
     typeof value.type === 'string' &&
     typeof value.filename === 'string' &&
     typeof value.url === 'string'
@@ -242,6 +263,9 @@ function sanitizeFilename(filename: string): string {
 export function resolveConnectorName(
   declarationType: string,
 ): string | undefined {
+  const reunionName = reunionConnectorName(declarationType)
+  if (reunionName) return reunionName
+
   switch (declarationType) {
     case 'template-file': {
       return 'template_file'
@@ -276,6 +300,9 @@ export function resolveSourcePointId(parameters: {
 }): string {
   const {connectorName, point} = parameters
 
+  if (connectorName.startsWith('reunion_'))
+    return point.sourceId ?? point.sourcePointId ?? point.pointId
+
   if (connectorName === 'smnpr') {
     return point.codeBSS ?? point.sourcePointId ?? point.name
   }
@@ -308,6 +335,8 @@ function selectFilesForConnector(parameters: {
   files: LocalDeclarationFile[]
 }): LocalDeclarationFile[] {
   const {declarationType, files} = parameters
+
+  if (reunionConnectorName(declarationType)) return files
 
   switch (declarationType) {
     case 'template-file': {
@@ -745,7 +774,7 @@ async function downloadDeclarationFilesToTemporary(parameters: {
   )
 }
 
-async function runConnectorForDeclaration(parameters: {
+export async function runConnectorForDeclaration(parameters: {
   declaration: DeclarationProcessingContext
   localFiles: LocalDeclarationFile[]
 }): Promise<IngestionResult> {
@@ -760,6 +789,43 @@ async function runConnectorForDeclaration(parameters: {
         `Type de déclaration non supporté par les connecteurs: ${declaration.type}`,
       ],
       data: undefined,
+    }
+  }
+
+  // Réunion preserves exact native series and reports attachment/row errors even
+  // when no point could be discovered. The API performs authorised association.
+  if (connectorName.startsWith('reunion_')) {
+    const series: NativeSeries[] = []
+    for (const file of selectFilesForConnector({
+      declarationType: declaration.type,
+      files: localFiles,
+    })) {
+      try {
+        const result = parseReunionFile({
+          buffer: await readFile(file.localPath),
+          filename: file.filename,
+          fileId: file.sourceFileId ?? file.id,
+          typeCode: declaration.type,
+        })
+        series.push(...result.series)
+        errors.push(...result.errors)
+      } catch {
+        errors.push({
+          fileId: file.sourceFileId ?? file.id,
+          filename: file.filename,
+          code: 'UNREADABLE_FILE',
+          severity: 'error',
+          message: 'La pièce jointe ne peut pas être lue.',
+        })
+      }
+    }
+    return {
+      errors,
+      data: {
+        nativeTemporal: true,
+        conflictPolicy: ConflictPolicy.SKIP_NEW_CHUNK,
+        series,
+      },
     }
   }
 
@@ -929,6 +995,133 @@ async function postIngestionResult(parameters: {
   }
 }
 
+export function buildReunionBatchPlan(
+  declaration: Pick<DeclarationProcessingContext, 'id' | 'type' | 'files'>,
+): Array<{
+  file: DeclarationFile | undefined
+  batch: {id: string; index: number; total: number}
+}> {
+  const files = [...declaration.files].sort((left, right) =>
+    left.id.localeCompare(right.id),
+  )
+  const id = createHash('sha256')
+    .update(
+      JSON.stringify({
+        declarationId: declaration.id,
+        type: declaration.type,
+        parserVersion: REUNION_PARSER_VERSION,
+        files: files.map((file) => ({
+          id: file.id,
+          sourceFileId: file.sourceFileId ?? file.id,
+          checksum: file.checksum,
+          filename: file.filename,
+          type: file.type,
+        })),
+      }),
+    )
+    .digest('hex')
+  return (files.length ? files : [undefined]).map((file, index) => ({
+    file,
+    batch: {id, index, total: Math.max(files.length, 1)},
+  }))
+}
+
+/** Parse one file at a time; spool bounded payloads before sending a known total. */
+export async function processNativeDeclarationFiles(
+  parameters: {
+    declaration: DeclarationProcessingContext
+    token: string
+    directory: string
+  },
+  dependencies: {
+    downloadFile?: typeof downloadFileToTemporary
+    ingest?: typeof postIngestionResult
+    parse?: typeof parseReunionFile
+  } = {},
+): Promise<{seriesCount: number; errorCount: number; batchCount: number}> {
+  const {declaration, token, directory} = parameters
+  const downloadFile = dependencies.downloadFile ?? downloadFileToTemporary
+  const ingest = dependencies.ingest ?? postIngestionResult
+  const parse = dependencies.parse ?? parseReunionFile
+  const plan = buildReunionBatchPlan(declaration)
+  const spoolDirectory = await mkdtemp(path.join(directory, 'native-parts-'))
+  const parts: NativeSpoolPart[] = []
+  let seriesCount = 0,
+    errorCount = 0
+  try {
+    for (const [fileIndex, {file}] of plan.entries()) {
+      let localFile: LocalDeclarationFile | undefined
+      try {
+        // A failed download or oversized single series aborts preparation before
+        // any API write. Previously accepted data and archived originals remain.
+        let parsed: {series: NativeSeries[]; errors: unknown[]}
+        if (file) {
+          localFile = await downloadFile({file, directory})
+          parsed = parse({
+            buffer: await readFile(localFile.localPath),
+            filename: file.filename,
+            fileId: file.sourceFileId ?? file.id,
+            typeCode: declaration.type,
+          })
+        } else {
+          parsed = {
+            series: [],
+            errors: [
+              {
+                code: 'NO_FILES',
+                severity: 'error',
+                message: 'Aucun fichier joint à la déclaration.',
+              },
+            ],
+          }
+        }
+        parts.push(
+          ...(await spoolNativeFileParts({
+            ...parsed,
+            directory: spoolDirectory,
+            fileIndex,
+          })),
+        )
+        seriesCount += parsed.series.length
+        errorCount += parsed.errors.length
+      } finally {
+        if (localFile) await rm(localFile.localPath, {force: true})
+      }
+    }
+    if (parts.length > 10000)
+      throw new Error(
+        'Le dossier dépasse 10 000 parties natives ; aucun envoi effectué.',
+      )
+    const id = createHash('sha256')
+      .update(
+        JSON.stringify({
+          transportVersion: REUNION_BATCH_TRANSPORT_VERSION,
+          filePlanId: plan[0].batch.id,
+          parts: parts.map((part) => part.checksum),
+        }),
+      )
+      .digest('hex')
+    for (const [index, part] of parts.entries()) {
+      const bytes = await readFile(part.path)
+      if (createHash('sha256').update(bytes).digest('hex') !== part.checksum)
+        throw new Error('Une partie native temporaire a changé.')
+      const result = JSON.parse(bytes.toString('utf8')) as NativeSpoolPayload
+      result.data.batch = {id, index, total: parts.length}
+      if (
+        part.bytes +
+          Buffer.byteLength(`,"batch":${JSON.stringify(result.data.batch)}`) >
+        REUNION_BATCH_MAX_BYTES
+      )
+        throw new Error('Une partie native dépasse la limite sûre de 48 MiB.')
+      await ingest({declarationId: declaration.id, token, result})
+      await rm(part.path, {force: true})
+    }
+    return {seriesCount, errorCount, batchCount: parts.length}
+  } finally {
+    await rm(spoolDirectory, {recursive: true, force: true})
+  }
+}
+
 type ProcessDeclarationResult = {
   declarationId: string
   declarationCode: string | undefined
@@ -958,6 +1151,23 @@ export async function processDeclaration(
   )
 
   try {
+    if (reunionConnectorName(declaration.type)) {
+      const result = await processNativeDeclarationFiles({
+        declaration,
+        token,
+        directory: temporaryDirectory,
+      })
+      console.log(
+        `[process-declaration] Native declaration ingested: batches=${result.batchCount}, series=${result.seriesCount}, errors=${result.errorCount}`,
+      )
+      return {
+        declarationId: declaration.id,
+        declarationCode: declaration.code,
+        seriesCount: result.seriesCount,
+        errorCount: result.errorCount,
+      }
+    }
+
     const localFiles = await downloadDeclarationFilesToTemporary({
       declaration,
       directory: temporaryDirectory,

@@ -1,3 +1,4 @@
+import {ReunionConnector} from './reunion.js'
 import {WillieConnector} from './willie.js'
 import {OrangeLiveObjectsConnector} from './orange_live_objects.js'
 import {AquasysConnector} from './aquasys.js'
@@ -22,4 +23,6 @@ export const connectorRegistry = new Map<
   ['gidaf', new GidafConnector()],
   ['omniscient_murgat', new OmniscientMurgatConnector()],
   ['eveler', new EvelerConnector()],
+  ['reunion_camion_citerne', new ReunionConnector('reunion_camion_citerne')],
+  ['reunion_multi_param', new ReunionConnector('reunion_multi_param')],
 ])

@@ -1,3 +1,5 @@
+import type {NativeSeries, ReunionParseError} from './reunion-types.js'
+
 export type ConfigEntry = {
   service_account: string
 }
@@ -121,6 +123,8 @@ export type ParsedPointPayload = {
   min_date: Date | undefined
   max_date: Date | undefined
   metrics: Timeserie[]
+  nativeSeries?: NativeSeries[]
+  parsingErrors?: ReunionParseError[]
 }
 
 export type ConnectorOutput = {
