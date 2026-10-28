@@ -37,7 +37,7 @@ export type ReunionFileInput = {
   fileId?: string
   typeCode: string
 }
-export const REUNION_PARSER_VERSION = '1.0.1'
+export const REUNION_PARSER_VERSION = '1.0.2'
 const CAMION_TYPES = [
   'camion-citerne',
   'reunion-camion-citerne',
@@ -397,7 +397,7 @@ function parseMulti(
 ): ReunionParseResult {
   const result: ReunionParseResult = {series: [], errors: []}
   const metadataName = workbook.SheetNames.find(
-    (name) => normalizeReunionText(name) === 'a lire',
+    (name) => normalizeReunionText(name).replaceAll('_', ' ') === 'a lire',
   )
   const rawPoint = metadataName
     ? cellValue(workbook.Sheets[metadataName], 3, 2)
@@ -417,7 +417,7 @@ function parseMulti(
       ),
     )
   const sheetNames = workbook.SheetNames.filter((name) =>
-    /^data\s*\|\s*t\s*=/i.test(normalizeReunionText(name)),
+    /^data\s*\|\s*t\s*=/i.test(normalizeReunionText(name).replaceAll('_', ' ')),
   )
   if (!sheetNames.length)
     result.errors.push(
@@ -491,9 +491,21 @@ function parseMulti(
       }
       const parameter = reunionParameter(originalParameter)
       const unit = reunionUnit(text(cellValue(sheet, 5, column)))
-      const frequency = reunionFrequency(text(cellValue(sheet, 4, column)))
       const originalValueType = text(cellValue(sheet, 3, column))
       const originalType = valueTypes[normalizeReunionText(originalValueType)]
+      const cumulative = ['volume prélevé', 'volume restitué'].includes(
+        parameter ?? '',
+      )
+      const rawFrequency = text(cellValue(sheet, 4, column))
+      // An instantaneous measurement has no inferred duration. Unknown
+      // frequencies remain invalid for volumes and aggregated measurements.
+      const frequency =
+        reunionFrequency(rawFrequency) ??
+        (normalizeReunionText(rawFrequency) === 'autre' &&
+        originalType === 'instantaneous' &&
+        !cumulative
+          ? 'irregular'
+          : undefined)
       const context = {
         sheet: sheetName,
         column,
@@ -578,9 +590,6 @@ function parseMulti(
             'La fréquence renseignée diffère du titre de l’onglet ; la fréquence renseignée est conservée.',
           ),
         )
-      const cumulative = ['volume prélevé', 'volume restitué'].includes(
-        parameter,
-      )
       if (cumulative && frequency === 'instant') {
         result.errors.push(
           makeIssue(
@@ -615,9 +624,9 @@ function parseMulti(
         result.errors.push(
           makeIssue(
             input,
-            context,
+            {...context, severity: 'warning'},
             'INVALID_METADATA_DATES',
-            'Dates de début ou de fin invalides ; vérifier les dates des mesures.',
+            'Dates de début ou de fin invalides ; les dates explicites des mesures sont conservées.',
           ),
         )
       const depthRaw = cellValue(sheet, 7, column),
@@ -684,7 +693,10 @@ function parseMulti(
           )
           continue
         }
-        if ((start && day < start) || (end && day > end)) {
+        if (
+          !invalidDateRange &&
+          ((start && day < start) || (end && day > end))
+        ) {
           result.errors.push(
             makeIssue(
               input,
@@ -698,7 +710,7 @@ function parseMulti(
         const rawTime = cellValue(sheet, row, 2)
         const time = reunionTime(rawTime)
         if (
-          (subDaily.has(frequency) && !time) ||
+          ((subDaily.has(frequency) || frequency === 'irregular') && !time) ||
           (!isBlank(rawTime) && !time)
         ) {
           result.errors.push(

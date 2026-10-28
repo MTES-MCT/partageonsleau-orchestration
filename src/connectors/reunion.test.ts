@@ -111,6 +111,109 @@ void test('reconnaît les formats Réunion et les inscrit au registre', () => {
     assert.ok(connectorRegistry.has(connector!))
   }
 })
+void test('les apostrophes finales des heures ne changent pas les instants', () => {
+  const result = parse(
+    multi(
+      [
+        {
+          parameter: 'débit prélevé',
+          unit: 'm3/h',
+          frequency: '15 minutes',
+          values: ['12.5'],
+        },
+      ],
+      ["01/02/2024'"],
+      ['0:6:29.123’'],
+    ),
+  )
+  assert.equal(result.errors.length, 0)
+  assert.equal(result.series[0].data[0].periodStart, '2024-01-31T20:06:29.123Z')
+  assert.equal(result.series[0].data[0].metadata.rawTime, '0:6:29.123’')
+  assert.equal(reunionTime("24:00'"), undefined)
+  assert.equal(reunionTime("12:00'junk"), undefined)
+})
+void test('les noms d’onglets ODS avec underscores gardent le point et les contrôles d’unité', () => {
+  const workbook = multi([
+    {parameter: 'volume prélevé', unit: 'm3', values: ['12']},
+    {parameter: 'débit prélevé', unit: 'm3', values: ['13']},
+  ])
+  workbook.SheetNames = workbook.SheetNames.map((name) => {
+    const renamed = name.replaceAll(' ', '_')
+    workbook.Sheets[renamed] = workbook.Sheets[name]
+    delete workbook.Sheets[name]
+    return renamed
+  })
+  const result = parse(workbook, 'aep-zre', 'ods')
+  assert.equal(result.series[0].pointPrelevement, 'reunion:DEP-974:point:412')
+  assert.equal(result.series[0].data[0].value, '12')
+  assert.deepEqual(
+    result.errors.map((issue) => issue.code),
+    ['INVALID_UNIT'],
+  )
+})
+void test('autre conserve seulement les mesures instantanées horodatées', () => {
+  const result = parse(
+    multi(
+      [
+        {
+          parameter: 'débit prélevé',
+          unit: 'm3/h',
+          frequency: 'autre',
+          values: ['12.5', '13'],
+        },
+        {
+          parameter: 'volume prélevé',
+          unit: 'm3',
+          frequency: 'autre',
+          values: ['8', '9'],
+        },
+        {
+          parameter: 'débit prélevé',
+          unit: 'm3/h',
+          frequency: 'autre',
+          nature: 'moyenne',
+          values: ['1', '2'],
+        },
+      ],
+      ['01/02/2024', '02/02/2024'],
+      ['00:06:29', ''],
+    ),
+  )
+  assert.equal(result.series.length, 1)
+  assert.equal(result.series[0].frequency, 'irregular')
+  assert.equal(result.series[0].data.length, 1)
+  assert.equal(
+    result.series[0].data[0].periodStart,
+    result.series[0].data[0].periodEnd,
+  )
+  assert.equal(
+    result.errors.filter((issue) => issue.code === 'INVALID_FREQUENCY').length,
+    2,
+  )
+  assert.equal(
+    result.errors.filter((issue) => issue.code === 'INVALID_TIME').length,
+    1,
+  )
+})
+void test('des bornes inversées ne masquent pas les dates explicites mais les bornes valides restent contrôlées', () => {
+  const workbook = multi([
+    {parameter: 'volume prélevé', unit: 'm3', frequency: 'jour', values: ['8']},
+  ])
+  const sheet = workbook.Sheets['Data | T=autre']
+  sheet.C8 = {t: 's', v: '01/02/2024'}
+  sheet.C9 = {t: 's', v: '01/01/2024'}
+  const invalid = parse(workbook)
+  assert.equal(invalid.series[0].data[0].value, '8')
+  assert.deepEqual(
+    invalid.errors.map((issue) => [issue.code, issue.severity]),
+    [['INVALID_METADATA_DATES', 'warning']],
+  )
+  sheet.C8 = {t: 's', v: '01/03/2024'}
+  sheet.C9 = {t: 's', v: '31/03/2024'}
+  const valid = parse(workbook)
+  assert.equal(valid.series.length, 0)
+  assert.equal(valid.errors[0].code, 'DATE_OUTSIDE_METADATA')
+})
 void test('le volume mensuel reste une période native, même en février bissextile', () => {
   const result = parse(
     multi([

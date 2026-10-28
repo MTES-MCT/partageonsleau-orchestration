@@ -110,7 +110,7 @@ export function reunionTime(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined
   const match =
     /^(\d{1,2})(?::|h)(\d{1,2})(?::(\d{1,2})(?:\.(\d{1,3}))?)?$/.exec(
-      value.trim(),
+      value.trim().replace(/['’]+$/, ''),
     )
   if (
     !match ||
